@@ -1,5 +1,4 @@
 #include <stdio.h>
-#define GT_IMPLEMENTATION
 #include <gt.h>
 
 int main(void) {

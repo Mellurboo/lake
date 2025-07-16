@@ -61,6 +61,8 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+
+    if(!go_run_nob_inside(&cmd, "vendor")) return 1;
     // I know there's more elegant ways to do it but frick you
     switch(example) {
     case EXAMPLE_ALL:

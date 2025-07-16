@@ -1,5 +1,4 @@
 #include <stdio.h>
-#define GT_IMPLEMENTATION
 #include <gt.h>
 #ifdef _WIN32
 # define NOMINMAX
