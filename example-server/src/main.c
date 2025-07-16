@@ -1,5 +1,6 @@
 #include <stdio.h>
-#include "../../gt.h"
+#define GT_IMPLEMENTATION
+#include <gt.h>
 #ifdef _WIN32
 # define NOMINMAX
 # include <winsock2.h>
@@ -8,6 +9,7 @@
 # include <unistd.h>
 # include <sys/socket.h>
 #endif
+#include <assert.h>
 
 #ifndef _WIN32
 # define closesocket close
@@ -29,6 +31,8 @@ void __attribute__((destructor)) _deinit_wsa() {
 int main(void) {
     printf("Hello from example-server!\n");
     int server = socket(AF_INET, SOCK_STREAM, 0);
+    assert(server >= 0);
     (void)server;
+    closesocket(server);
     return 0;
 }

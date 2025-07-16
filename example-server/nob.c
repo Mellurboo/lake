@@ -129,6 +129,8 @@ int main(int argc, char** argv) {
         "-D_CRT_SECURE_NO_WARNINGS", "-Wno-deprecated-declarations",
     #endif
         );
+        // Includes
+        cmd_append(&cmd, "-I../vendor/gt");
         // Actual compilation
         cmd_append(&cmd,
             "-MP", "-MMD", "-O1", "-g", "-c",
