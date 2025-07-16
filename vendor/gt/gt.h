@@ -168,6 +168,7 @@ void __attribute__((naked)) gtyield(void) {
 static void gtprelude(void);
 static void* gtsetup_frame(void* sp_void) {
     uint64_t* sp = sp_void;
+    *(--sp) = 0; // Reserve some memory for alignment :O
     *(--sp) = (uint64_t)gtprelude; // rip
     *(--sp) = 0;         // rbp
     *(--sp) = 0;         // rbx
@@ -250,7 +251,7 @@ void* gtswitch(void* sp) {
     scheduler.thread_current = thread;
     return thread->sp;
 }
-static void __attribute__((naked)) gtprelude(void) {
+static void gtprelude(void) {
     GThread* thread = gthread_current();
     thread->entry(thread->arg);
     gtlist_remove(&thread->list);
