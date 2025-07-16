@@ -2,17 +2,23 @@
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 
+#ifdef _WIN32
+# define EXE_SUFFIX ".exe"
+#else
+# define EXE_SUFFIX ""
+#endif
+
 static bool go_run_nob_inside(Nob_Cmd* cmd, const char* dir) {
     size_t temp = nob_temp_save();
     const char* cur = nob_get_current_dir_temp();
     assert(cur);
     cur = nob_temp_realpath(cur);
     if(!nob_set_current_dir(dir)) return false;
-    if(nob_file_exists("nob") != 1) {
-        nob_cmd_append(cmd, NOB_REBUILD_URSELF("nob", "nob.c"));
+    if(nob_file_exists("nob"EXE_SUFFIX) != 1) {
+        nob_cmd_append(cmd, NOB_REBUILD_URSELF("nob"EXE_SUFFIX, "nob.c"));
         if(!nob_cmd_run_sync_and_reset(cmd)) return false;
     }
-    nob_cmd_append(cmd, "./nob");
+    nob_cmd_append(cmd, "./nob"EXE_SUFFIX);
     bool res = nob_cmd_run_sync_and_reset(cmd);
     assert(nob_set_current_dir(cur));
     nob_temp_rewind(temp);
@@ -72,10 +78,10 @@ int main(int argc, char** argv) {
     if(run && example != EXAMPLE_ALL) {
         switch(example) {
         case EXAMPLE_CLIENT:
-            cmd_append(&cmd, "./.build/example-client/example-client");
+            cmd_append(&cmd, "./.build/example-client/example-client"EXE_SUFFIX);
             break;
         case EXAMPLE_SERVER:
-            cmd_append(&cmd, "./.build/example-server/example-server");
+            cmd_append(&cmd, "./.build/example-server/example-server"EXE_SUFFIX);
             break;
         }
         return cmd_run_sync_and_reset(&cmd) ? 0 : 1;
