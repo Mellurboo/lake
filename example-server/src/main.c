@@ -32,11 +32,12 @@ void client_thread(void* fd_void) {
     char buf[128];
     for(;;) {
         gtblockfd(fd, GTBLOCKIN);
-        int n = read(fd, buf, sizeof(buf));
+        int n = recv(fd, buf, sizeof(buf), 0);
         if(n == 0) break;
+        printf("Got MSG!\n");
         if(n < 0) break;
         gtblockfd(fd, GTBLOCKOUT);
-        int e = write(fd, buf, n);
+        int e = send(fd, buf, n, 0);
         (void)e;
     }
     closesocket(fd);
@@ -68,6 +69,7 @@ int main(void) {
         gtblockfd(server, GTBLOCKIN);
         int client_fd = accept(server, NULL, NULL);
         if(client_fd < 0) break;
+        printf("Connected!\n");
         gtgo(client_thread, (void*)(uintptr_t)client_fd);
     }
     (void)server;

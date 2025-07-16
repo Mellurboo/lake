@@ -26,6 +26,10 @@ int main(int argc, char** argv) {
     String_Builder stb = { 0 };
     if(nob_c_needs_rebuild1(&stb, &pathb, obj, src)) {
         cmd_append(&cmd, cc, "-O2", "-MMD", "-g", "-c", src, "-o", obj);
+#ifdef _WIN32
+        // TODO: Gradma delete your build and fix the sse in GT
+        cmd_append(&cmd, "-mno-sse", "-mno-sse2");
+#endif
         return cmd_run_sync_and_reset(&cmd) ? 0 : 1;
     }
     return 0;
