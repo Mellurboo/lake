@@ -2,4 +2,4 @@
 nob
 *.old
 *.exe
-
+.vscode

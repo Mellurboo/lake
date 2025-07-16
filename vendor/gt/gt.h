@@ -32,7 +32,7 @@ void gtblockfd(unsigned int fd, uint32_t events);
 #include <assert.h>
 
 #ifdef _WIN32
-# error binbows
+
 #else
 # include <sys/epoll.h>
 # include <sys/mman.h>
@@ -145,6 +145,30 @@ GThread* gthread_current(void) {
 
 // Architecture specific
 void __attribute__((naked)) gtyield(void) {
+#ifdef _WIN32
+    asm(
+        "push %rbp\n"
+        "push %rbx\n"
+        "push %r12\n"
+        "push %r13\n"
+        "push %r14\n"
+        "push %r15\n"
+        "push %rsi\n"
+        "push %rdi\n"
+        "movq %rsp, %rcx\n"
+        "call gtswitch\n"
+        "mov %rax, %rsp\n"
+        "pop %rdi\n"
+        "pop %rsi\n"
+        "pop %r15\n"
+        "pop %r14\n"
+        "pop %r13\n"
+        "pop %r12\n"
+        "pop %rbx\n"
+        "pop %rbp\n"
+        "ret"
+    );
+#else
     asm(
         "push %rbp\n"
         "push %rbx\n"
@@ -163,6 +187,7 @@ void __attribute__((naked)) gtyield(void) {
         "pop %rbp\n"
         "ret"
     );
+#endif
 }
 
 static void gtprelude(void);
@@ -176,6 +201,10 @@ static void* gtsetup_frame(void* sp_void) {
     *(--sp) = 0;         // r13
     *(--sp) = 0;         // r14
     *(--sp) = 0;         // r15
+#ifdef _WIN32
+    *(--sp) = 0;         // rsi
+    *(--sp) = 0;         // rdi
+#endif
     return sp;
 }
 // End Architecture specific
@@ -192,6 +221,13 @@ void gtgo(void (*entry)(void* arg), void* arg) {
     assert(heap_get((uintptr_t)e, &heap) >= 0);
     // Stack grows backwards:
     thread->sp = heap.address + heap.size; 
+#elif _WIN32
+    thread->sp = VirtualAlloc(NULL, GT_STACK_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (thread->sp == NULL) {
+        fprintf(stderr, "VirtualAlloc failed: %lu\n", GetLastError());
+        exit(1);
+    }
+    thread->sp = (char*)thread->sp + GT_STACK_SIZE;
 #else
     thread->sp = mmap(NULL, GT_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if(thread->sp == MAP_FAILED) {
@@ -215,7 +251,11 @@ void* gtswitch(void* sp) {
         // for our purposes its fine but in general it might be useful :)
         if(gtlist_empty(&scheduler.queue)) timeout = -1;
         struct epoll_event events[128];
-        int n = epoll_wait(scheduler.epoll, events, sizeof(events)/sizeof(*events), timeout);
+        int n = epoll_wait(
+#ifdef _WIN32
+            (HANDLE)
+#endif            
+            scheduler.epoll, events, sizeof(events)/sizeof(*events), timeout);
         assert(n >= 0);
         for(size_t i = 0; i < (size_t)n; ++i) {
             GPollBucket* bucket = events[i].data.ptr;
@@ -237,7 +277,11 @@ void* gtswitch(void* sp) {
                 free(gpoll_map_remove(&scheduler.pollmap, bucket->fd));
                 op = EPOLL_CTL_DEL;
             }
-            if(epoll_ctl(scheduler.epoll, op, fd, &ev) < 0) {
+            if(epoll_ctl(
+#ifdef _WIN32
+            (HANDLE)
+#endif
+                scheduler.epoll, op, fd, &ev) < 0) {
                 perror("mod/del fd in epoll");
                 exit(1);
             }
@@ -277,7 +321,11 @@ void gtblockfd(unsigned int fd, uint32_t events) {
         struct epoll_event ev;
         ev.events = bucket->epoll_events;
         ev.data.ptr = bucket;
-        if(epoll_ctl(scheduler.epoll, op, fd, &ev) < 0) {
+        if(epoll_ctl(
+#ifdef _WIN32
+            (HANDLE)
+#endif
+            scheduler.epoll, op, fd, &ev) < 0) {
             perror("adding fd in epoll");
             exit(1);
         }
@@ -290,7 +338,7 @@ void gtblockfd(unsigned int fd, uint32_t events) {
 void gtinit(void) {
     gtlist_init(&scheduler.queue);
     gtlist_init(&scheduler.dead);
-    intptr_t e = epoll_create1(0);
+    intptr_t e = (intptr_t)epoll_create1(0);
     assert(e >= 0);
     scheduler.epoll = e;
     GThread* main_thread = malloc(sizeof(GThread));

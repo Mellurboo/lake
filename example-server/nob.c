@@ -146,6 +146,9 @@ int main(int argc, char** argv) {
         cmd_append(&cmd, cc, "-o", exe);
         da_append_many(&cmd, objs.items, objs.count);
         cmd_append(&cmd, temp_sprintf("%s/vendor.o", bindir));
+    #ifdef _WIN32
+        cmd_append(&cmd, "-lws2_32", "-g");
+    #endif
         if(!cmd_run_sync_and_reset(&cmd)) return 1;
     }
 
