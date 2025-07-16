@@ -1,31 +1,7 @@
 #include <stdio.h>
 #include <gt.h>
-#ifdef _WIN32
-# define NOMINMAX
-# include <winsock2.h>
-# include <ws2tcpip.h>
-#else
-# include <unistd.h>
-# include <sys/socket.h>
-# include <arpa/inet.h>
-#endif
+#include <winnet.h>
 #include <assert.h>
-
-#ifndef _WIN32
-# define closesocket close
-#endif
-#ifdef _WIN32
-void __attribute__((constructor)) _init_wsa() {
-    WSADATA wsaDATA;
-    if(WSAStartup(MAKEWORD(2, 2), &wsaDATA)) {
-        fprintf(stderr, "WSAStartup failure\n");
-        exit(EXIT_FAILURE);
-    }
-}
-void __attribute__((destructor)) _deinit_wsa() {
-    WSACleanup();
-}
-#endif
 
 void client_thread(void* fd_void) {
     int fd = (uintptr_t)fd_void;

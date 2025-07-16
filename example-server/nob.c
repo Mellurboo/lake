@@ -130,7 +130,7 @@ int main(int argc, char** argv) {
     #endif
         );
         // Includes
-        cmd_append(&cmd, "-I../vendor/gt");
+        cmd_append(&cmd, "-I../vendor");
         // Actual compilation
         cmd_append(&cmd,
             "-MP", "-MMD", "-O1", "-g", "-c",
@@ -140,12 +140,12 @@ int main(int argc, char** argv) {
         if(!cmd_run_sync_and_reset(&cmd)) return 1;
     }
 
+    da_append(&objs, temp_sprintf("%s/vendor.o", bindir));
     const char* exe = temp_sprintf("%s/example-server/example-server" EXE_SUFFIX, bindir);
 
     if(needs_rebuild(exe, objs.items, objs.count)) {
         cmd_append(&cmd, cc, "-o", exe);
         da_append_many(&cmd, objs.items, objs.count);
-        cmd_append(&cmd, temp_sprintf("%s/vendor.o", bindir));
     #ifdef _WIN32
         cmd_append(&cmd, "-lws2_32", "-g");
     #endif

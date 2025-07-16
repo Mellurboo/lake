@@ -2,5 +2,7 @@
 # include "wepoll/wepoll.c"
 #endif
 
+#define WINNET_IMPLEMENTATION
+#include "winnet.h"
 #define GT_IMPLEMENTATION
-#include "gt/gt.h"
+#include "gt.h"
