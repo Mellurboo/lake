@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
     File_Paths pathb = { 0 };
     String_Builder stb = { 0 };
     if(nob_c_needs_rebuild1(&stb, &pathb, obj, src)) {
-        cmd_append(&cmd, cc, "-O2", "-MMD", "-c", src, "-o", obj);
+        cmd_append(&cmd, cc, "-O2", "-MMD", "-g", "-c", src, "-o", obj);
         return cmd_run_sync_and_reset(&cmd) ? 0 : 1;
     }
     return 0;

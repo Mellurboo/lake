@@ -25,10 +25,20 @@ void __attribute__((destructor)) _deinit_wsa() {
     WSACleanup();
 }
 #endif
+void counter(void* arg) {
+    (void)arg;
+    for(size_t i = 0; i < 10; ++i) {
+        fprintf(stderr, "%zu\n", i);
+        gtyield();
+    }
+}
 // TODO: neterr() function that returns a string on last networking error
 // TODO: error logging on networking error
 int main(void) {
-    printf("Hello from example-server!\n");
+    gtinit();
+    gtgo(counter, NULL);
+    gtgo(counter, NULL);
+    for(size_t i = 0; i < 20; ++i) gtyield();
     int server = socket(AF_INET, SOCK_STREAM, 0);
     assert(server >= 0);
     (void)server;

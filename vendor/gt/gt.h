@@ -192,8 +192,12 @@ void gtgo(void (*entry)(void* arg), void* arg) {
     // Stack grows backwards:
     thread->sp = heap.address + heap.size; 
 #else
-    thread->sp = mmap(NULL, GT_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE, -1, 0);
-    assert(thread->sp && "Ran out of memory");
+    thread->sp = mmap(NULL, GT_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if(thread->sp == MAP_FAILED) {
+        perror("mmap stack");
+        exit(1);
+    }
+    thread->sp += GT_STACK_SIZE;
 #endif
     thread->sp = gtsetup_frame(thread->sp);
     gtlist_init(&thread->list);
