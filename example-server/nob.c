@@ -115,8 +115,6 @@ int main(int argc, char** argv) {
         if(!nob_c_needs_rebuild1(&stb, &pathb, out, src)) continue;
         // C compiler
         cmd_append(&cmd, cc);
-        // C standard
-        cmd_append(&cmd, "-std=c11");
         // Warnings
         cmd_append(&cmd,
             "-Wall",
