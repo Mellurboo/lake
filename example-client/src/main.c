@@ -29,6 +29,16 @@ static intptr_t read_exact(uintptr_t fd, void* buf, size_t size) {
     }
     return 1;
 }
+static intptr_t write_exact(uintptr_t fd, const void* buf, size_t size) {
+    while(size) {
+        intptr_t e = send(fd, buf, size, 0);
+        if(e < 0) return e;
+        if(e == 0) return 0; 
+        buf = ((char*)buf) + (size_t)e;
+        size -= (size_t)e;
+    }
+    return 1;
+}
 // Generic response header
 typedef struct {
     uint32_t packet_id;
@@ -73,7 +83,7 @@ int main(void) {
 
     size_t packet_id = 0;
     size_t get_extensions_id = packet_id++;
-    int e = send(client, &(Request) { .protocol_id = 0, .func_id = 0, .packet_id = get_extensions_id, .packet_len = 0 }, sizeof(Request), 0);
+    int e = send(client, &(Request) { .protocol_id = 0, .func_id = 0, .packet_id = htonl(get_extensions_id), .packet_len = 0 }, sizeof(Request), 0);
     if(e < 0) {
         //TODO: Crossplatform network errors
         fprintf(stderr, "Failed to send request\n");
@@ -81,6 +91,8 @@ int main(void) {
     }
     assert(e == sizeof(Request));
     Response resp; 
+
+    uint32_t echo_protocol_id = 0;
     for(;;) {
         e = read_exact(client, &resp, sizeof(resp));
         assert(e == 1);
@@ -100,9 +112,47 @@ int main(void) {
             return 1;
         }
         fprintf(stderr, "Protocol id=%u name=%s\n", protocol->id, protocol->name);
+        if(strcmp(protocol->name, "echo") == 0) echo_protocol_id = protocol->id;
         free(protocol);
     }
+    if(!echo_protocol_id) {
+        fprintf(stderr, "ERROR: no echo protocol\n");
+        return 1;
+    } 
     fprintf(stderr, "Sent request successfully!\n");
+    for(;;) {
+        char buf[128];
+        printf("> ");
+        fflush(stdout);
+        char* _ = fgets(buf, sizeof(buf), stdin);
+        (void)_;
+        if(strcmp(buf, ":quit\n") == 0) break;
+        Request req = {
+            .protocol_id = echo_protocol_id,
+            .func_id = 0,
+            .packet_id = 69,
+            .packet_len = strlen(buf)
+        };
+        request_hton(&req);
+        write_exact(client, &req, sizeof(req));
+        write_exact(client, buf, strlen(buf));
+
+        e = read_exact(client, &resp, sizeof(resp));
+        assert(e == 1);
+        response_ntoh(&resp);
+        if(resp.packet_id != 69) {
+            fprintf(stderr, "We got packet_id = %u -> %u\n", resp.packet_id, ntohl(resp.packet_id));
+            return 1;
+        }
+        assert(resp.packet_len == strlen(buf));
+
+        int n = read_exact(client, buf, resp.packet_len);
+        if(n <= 0) {
+            fprintf(stderr, "Thingy: %s\n", strerror(errno));
+            break;
+        }
+        fprintf(stderr, "%.*s", resp.packet_len, buf);
+    }
     closesocket(client);
     return 0;
 }

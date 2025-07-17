@@ -68,10 +68,32 @@ void coreGetProtocols(int fd, Request* header);
 protocol_func_t coreProtocolFuncs[] = {
     coreGetProtocols,
 };
+
+void echoEcho(int fd, Request* header) {
+    (void)fd;
+    (void)header;
+    char buf[128];
+    // TODO: send some error here:
+    if(header->packet_len > sizeof(buf)) return;
+    gtread_exact(fd, buf, header->packet_len);
+    Response resp = {
+        .packet_id = header->packet_id,
+        .opcode = 0,
+        .packet_len = header->packet_len
+    };
+    response_hton(&resp);
+    gtwrite_exact(fd, &resp, sizeof(resp));
+    gtwrite_exact(fd, buf, header->packet_len);
+}
+protocol_func_t echoProtocolFuncs[] = {
+    echoEcho,
+};
+
 #define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 #define PROTOCOL(__name, __funcs) { .name = __name, .funcs_count = ARRAY_LEN(__funcs),  .funcs = __funcs }
 Protocol protocols[] = {
     PROTOCOL("CORE", coreProtocolFuncs),
+    PROTOCOL("echo", echoProtocolFuncs),
 };
 void coreGetProtocols(int fd, Request* header) {
     (void)fd;
@@ -96,6 +118,7 @@ void coreGetProtocols(int fd, Request* header) {
     gtwrite_exact(fd, &res_header, sizeof(res_header));
 }
 void client_thread(void* fd_void) {
+
     int fd = (uintptr_t)fd_void;
     Request req_header;
     Response res_header;
@@ -103,8 +126,9 @@ void client_thread(void* fd_void) {
         int n = gtread_exact(fd, &req_header, sizeof(req_header));
         if(n < 0) break;
         if(n == 0) break;
+        request_ntoh(&req_header);
         if(req_header.protocol_id >= ARRAY_LEN(protocols)) {
-            fprintf(stderr, "%d: Invalid protocol_id: %u\n",  fd, req_header.protocol_id);
+            fprintf(stderr, "%d: Invalid protocol_id: %u\n", fd, req_header.protocol_id);
             res_header.packet_id = req_header.packet_id;
             res_header.opcode = -ERROR_INVALID_PROTOCOL_ID;
             res_header.packet_len = 0;
