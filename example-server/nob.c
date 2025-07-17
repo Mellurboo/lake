@@ -119,6 +119,7 @@ int main(int argc, char** argv) {
         cmd_append(&cmd,
             "-Wall",
             "-Wextra",
+            "-Wno-unused-function",
     // on binbows there are SOOOO many warnings and some of them are unfixable so frick it
     #ifndef _WIN32
         #if 1
