@@ -14,10 +14,21 @@ int main(void) {
         closesocket(client);
         return 1;
     }
+    const char* hostname = "localhost";
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
-    server_addr.sin_addr.s_addr = INADDR_ANY;
+    if (inet_pton(AF_INET, hostname, &server_addr.sin_addr) <= 0) {
+        struct hostent *he = gethostbyname(hostname);
+        if (he == NULL) {
+            //TODO: Crossplatform network errors
+            fprintf(stderr, "couldn't resolve hostname");
+            return 1;
+        }
+        
+        memcpy(&server_addr.sin_addr, he->h_addr_list[0], he->h_length);
+    }
+
     // TODO: error logging on networking error
     if(connect(client, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) return 1;
 
