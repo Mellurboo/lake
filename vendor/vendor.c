@@ -3,7 +3,7 @@
 #endif
 
 #include <stdio.h>
-#define WINNET_IMPLEMENTATION
-#include "winnet.h"
+#define SNET_IMPLEMENTATION
+#include "snet.h"
 #define GT_IMPLEMENTATION
 #include "gt.h"

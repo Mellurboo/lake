@@ -15,7 +15,7 @@
 #endif
 
 
-#ifdef WINNET_IMPLEMENTATION
+#ifdef SNET_IMPLEMENTATION
 #ifdef _WIN32
 static void __attribute__((constructor)) _init_wsa() {
     WSADATA wsaDATA;

@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <gt.h>
-#include <winnet.h>
+#include <snet.h>
 #include <assert.h>
 #include <string.h>
 
