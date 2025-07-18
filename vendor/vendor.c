@@ -2,7 +2,6 @@
 # include "wepoll/wepoll.c"
 #endif
 
-#include <stdio.h>
 #define SNET_IMPLEMENTATION
 #include "snet.h"
 #define GT_IMPLEMENTATION
