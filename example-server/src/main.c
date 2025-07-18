@@ -4,6 +4,18 @@
 #include <assert.h>
 #include <string.h>
 
+#ifdef _WIN32
+# define NEWLINE "\n\r"
+#else
+# define NEWLINE "\n"
+#endif
+#define log(level, ...) (fprintf(stderr, # level ": " __VA_ARGS__), fprintf(stderr, NEWLINE))
+#define trace(...) log(TRACE, __VA_ARGS__)
+#define info(...) log(INFO, __VA_ARGS__)
+#define warn(...) log(WARN, __VA_ARGS__)
+#define error(...) log(ERROR, __VA_ARGS__)
+#define fatal(...) log(FATAL, __VA_ARGS__)
+
 static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
     while(size) {
         gtblockfd(fd, GTBLOCKIN);
@@ -174,12 +186,12 @@ int main(void) {
     if(bind(server, (struct sockaddr*)&address, sizeof(address)) < 0) return 1;
     // TODO: error logging on networking error
     if(listen(server, 50) < 0) return 1;
-    fprintf(stderr, "Started listening on: 0.0.0.0:%d\n", PORT);
+    info("Started listening on: localhost:%d", PORT);
     for(;;) {
         gtblockfd(server, GTBLOCKIN);
         int client_fd = accept(server, NULL, NULL);
         if(client_fd < 0) break;
-        printf("Connected!\n");
+        info("%d: connected", client_fd);
         gtgo(client_thread, (void*)(uintptr_t)client_fd);
     }
     (void)server;
