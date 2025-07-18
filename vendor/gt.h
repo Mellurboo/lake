@@ -310,7 +310,7 @@ void gtblockfd(unsigned int fd, uint32_t events) {
     GThread* thread = gthread_current();
     thread->epoll_events = 0;
 #ifdef _WIN32
-    thread->epoll_event |= EPOLLHUP | EPOLLERR;
+    thread->epoll_events |= EPOLLHUP | EPOLLERR;
 #endif
     if(events & GTBLOCKIN)  thread->epoll_events |= EPOLLIN;
     if(events & GTBLOCKOUT) thread->epoll_events |= EPOLLOUT;
