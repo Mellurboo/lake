@@ -250,43 +250,45 @@ void* gtswitch(void* sp) {
         // TODO: maybe allow threads to register a timeout.
         // for our purposes its fine but in general it might be useful :)
         if(gtlist_empty(&scheduler.queue)) timeout = -1;
-        struct epoll_event events[128];
-        int n = epoll_wait(
-#ifdef _WIN32
-            (HANDLE)
-#endif            
-            scheduler.epoll, events, sizeof(events)/sizeof(*events), timeout);
-        assert(n >= 0);
-        for(size_t i = 0; i < (size_t)n; ++i) {
-            GPollBucket* bucket = events[i].data.ptr;
-            gtlist_head* next;
-            for(gtlist_head* head = bucket->threads.next; head != &bucket->threads; head = next) {
-                next = head->next;
-                GThread* thread = (GThread*)head;
-                if(thread->epoll_events & events[i].events) {
-                    gtlist_remove(&thread->list);
-                    gtlist_insert(&scheduler.queue, &thread->list);
+        while(gtlist_empty(&scheduler.queue)) {
+            struct epoll_event events[128];
+            int n = epoll_wait(
+    #ifdef _WIN32
+                (HANDLE)
+    #endif            
+                scheduler.epoll, events, sizeof(events)/sizeof(*events), timeout);
+            assert(n >= 0);
+            for(size_t i = 0; i < (size_t)n; ++i) {
+                GPollBucket* bucket = events[i].data.ptr;
+                gtlist_head* next;
+                for(gtlist_head* head = bucket->threads.next; head != &bucket->threads; head = next) {
+                    next = head->next;
+                    GThread* thread = (GThread*)head;
+                    if(thread->epoll_events & events[i].events) {
+                        gtlist_remove(&thread->list);
+                        gtlist_insert(&scheduler.queue, &thread->list);
+                    }
                 }
+                struct epoll_event ev;
+                ev.events = bucket->epoll_events & (~events[i].events);
+                ev.data.ptr = bucket;
+                int fd = bucket->fd;
+                int op = EPOLL_CTL_MOD;
+                if(gtlist_empty(&bucket->threads)) {
+                    free(gpoll_map_remove(&scheduler.pollmap, bucket->fd));
+                    op = EPOLL_CTL_DEL;
+                }
+                if(epoll_ctl(
+    #ifdef _WIN32
+                (HANDLE)
+    #endif
+                    scheduler.epoll, op, fd, &ev) < 0) {
+                    perror("mod/del fd in epoll");
+                    exit(1);
+                }
+                // gtlist_remove(&ethread->list);
+                // gtlist_insert(&ethread->list, &scheduler.queue);
             }
-            struct epoll_event ev;
-            ev.events = bucket->epoll_events & (~events[i].events);
-            ev.data.ptr = bucket;
-            int fd = bucket->fd;
-            int op = EPOLL_CTL_MOD;
-            if(gtlist_empty(&bucket->threads)) {
-                free(gpoll_map_remove(&scheduler.pollmap, bucket->fd));
-                op = EPOLL_CTL_DEL;
-            }
-            if(epoll_ctl(
-#ifdef _WIN32
-            (HANDLE)
-#endif
-                scheduler.epoll, op, fd, &ev) < 0) {
-                perror("mod/del fd in epoll");
-                exit(1);
-            }
-            // gtlist_remove(&ethread->list);
-            // gtlist_insert(&ethread->list, &scheduler.queue);
         }
     }
     GThread* thread = (GThread*)gtlist_next(&scheduler.queue);
@@ -307,6 +309,9 @@ static void gtprelude(void) {
 void gtblockfd(unsigned int fd, uint32_t events) {
     GThread* thread = gthread_current();
     thread->epoll_events = 0;
+#ifdef _WIN32
+    thread->epoll_event |= EPOLLHUP | EPOLLERR;
+#endif
     if(events & GTBLOCKIN)  thread->epoll_events |= EPOLLIN;
     if(events & GTBLOCKOUT) thread->epoll_events |= EPOLLOUT;
     assert(thread->epoll_events);
