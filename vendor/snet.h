@@ -15,6 +15,7 @@
 #endif
 
 
+const char* sneterr(void);
 #ifdef SNET_IMPLEMENTATION
 #ifdef _WIN32
 static void __attribute__((constructor)) _init_wsa() {
@@ -28,4 +29,17 @@ static void __attribute__((destructor)) _deinit_wsa() {
     WSACleanup();
 }
 #endif
+#ifdef _WIN32
+#else
+# include <string.h>
+# include <errno.h>
+#endif
+const char* sneterr(void) {
+#ifdef _WIN32
+    // TODO: bruvsky pls implement on binbows opewating system for video james
+    return "";
+#else
+    return strerror(errno);
+#endif
+}
 #endif

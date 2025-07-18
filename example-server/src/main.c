@@ -165,15 +165,17 @@ void client_thread(void* fd_void) {
     fprintf(stderr, "Disconnected!\n");
 }
 #define PORT 6969
-// TODO: neterr() function that returns a string on last networking error
-// TODO: error logging on networking error
 int main(void) {
     gtinit();
     for(size_t i = 0; i < 20; ++i) gtyield();
     int server = socket(AF_INET, SOCK_STREAM, 0);
+    if(server < 0) {
+        fatal("Could not create server socket: %s", sneterr());
+        return 1;
+    }
     int opt = 1;
-    // TODO: error logging on networking error
-    if (setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    if(setsockopt(server, SOL_SOCKET, SO_REUSEADDR, (void*)&opt, sizeof(opt)) < 0) {
+        fatal("Could not set SO_REUSEADDR: %s", sneterr());
         closesocket(server);
         return 1;
     }
@@ -182,10 +184,14 @@ int main(void) {
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(PORT);
-    // TODO: error logging on networking error
-    if(bind(server, (struct sockaddr*)&address, sizeof(address)) < 0) return 1;
-    // TODO: error logging on networking error
-    if(listen(server, 50) < 0) return 1;
+    if(bind(server, (struct sockaddr*)&address, sizeof(address)) < 0) {
+        fatal("Could not bind server: %s", sneterr());
+        return 1;
+    }
+    if(listen(server, 50) < 0) {
+        fatal("Could not listen on server: %s", sneterr());
+        return 1;
+    }
     info("Started listening on: localhost:%d", PORT);
     for(;;) {
         gtblockfd(server, GTBLOCKIN);

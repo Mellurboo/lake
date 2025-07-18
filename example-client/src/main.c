@@ -57,9 +57,13 @@ typedef struct {
 #define PORT 6969
 int main(void) {
     int client = socket(AF_INET, SOCK_STREAM, 0); 
+    if(client < 0) {
+        fprintf(stderr, "FATAL: Could not create server socket: %s\n", sneterr());
+        return 1;
+    }
     int opt = 1;
-    // TODO: error logging on networking error
-    if (setsockopt(client, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    if(setsockopt(client, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        fprintf(stderr, "FATAL: Could not set SO_REUSEADDR: %s\n", sneterr());
         closesocket(client);
         return 1;
     }
@@ -67,26 +71,26 @@ int main(void) {
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
-    if (inet_pton(AF_INET, hostname, &server_addr.sin_addr) <= 0) {
+    if(inet_pton(AF_INET, hostname, &server_addr.sin_addr) <= 0) {
         struct hostent *he = gethostbyname(hostname);
         if (he == NULL) {
-            //TODO: Crossplatform network errors
-            fprintf(stderr, "couldn't resolve hostname\n");
+            fprintf(stderr, "FATAL: Couldn't resolve hostname %s: %s\n", hostname, sneterr()); 
             return 1;
         }
         
         memcpy(&server_addr.sin_addr, he->h_addr_list[0], he->h_length);
     }
 
-    // TODO: error logging on networking error
-    if(connect(client, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) return 1;
+    if(connect(client, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        fprintf(stderr, "FATAL: Couldn't connect to %s %d: %s\n", hostname, PORT, sneterr());
+        return 1;
+    }
 
     size_t packet_id = 0;
     size_t get_extensions_id = packet_id++;
     int e = send(client, &(Request) { .protocol_id = 0, .func_id = 0, .packet_id = htonl(get_extensions_id), .packet_len = 0 }, sizeof(Request), 0);
     if(e < 0) {
-        //TODO: Crossplatform network errors
-        fprintf(stderr, "Failed to send request\n");
+        fprintf(stderr, "FATAL: Failed to send request: %s\n", sneterr());
         return 1;
     }
     assert(e == sizeof(Request));
@@ -107,16 +111,15 @@ int main(void) {
         protocol->id = ntohl(protocol->id);
         protocol->name[resp.packet_len-sizeof(uint32_t)] = '\0';
         if(((int)resp.opcode) < 0) {
-            //TODO: Crossplatform network errors
-            fprintf(stderr, "ERROR: Error on my response: %d\n", -((int)resp.opcode));
+            fprintf(stderr, "FATAL: Error on my response: %d\n", -((int)resp.opcode));
             return 1;
         }
-        fprintf(stderr, "Protocol id=%u name=%s\n", protocol->id, protocol->name);
+        fprintf(stderr, "INFO: Protocol id=%u name=%s\n", protocol->id, protocol->name);
         if(strcmp(protocol->name, "echo") == 0) echo_protocol_id = protocol->id;
         free(protocol);
     }
     if(!echo_protocol_id) {
-        fprintf(stderr, "ERROR: no echo protocol\n");
+        fprintf(stderr, "FATAL: no echo protocol\n");
         return 1;
     } 
     fprintf(stderr, "Sent request successfully!\n");
@@ -148,10 +151,10 @@ int main(void) {
 
         int n = read_exact(client, buf, resp.packet_len);
         if(n <= 0) {
-            fprintf(stderr, "Thingy: %s\n", strerror(errno));
+            fprintf(stderr, "ERROR: failed to read response: %s\n", sneterr());
             break;
         }
-        fprintf(stderr, "%.*s", resp.packet_len, buf);
+        printf("%.*s", resp.packet_len, buf);
     }
     closesocket(client);
     return 0;
