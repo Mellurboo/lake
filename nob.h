@@ -1459,6 +1459,12 @@ bool nob_dep_analyse_str(char* data, char** result, Nob_File_Paths* paths) {
     // NOTE: Assumes strchr returns NULL on not found
     char* result_end = strchr(data, ':');
     if(!result_end) return false;
+#ifdef _WIN32
+    // On windows we skip C:\.... the drive letter
+    if(result_end == data + 1) {
+        result_end = strchr(data + 2, ':');
+    }
+#endif
     result_end[0] = '\0';
     *result = data;
     data = result_end+1;
