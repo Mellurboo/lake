@@ -96,6 +96,7 @@ int main(void) {
     assert(e == sizeof(Request));
     Response resp; 
 
+    uint32_t auth_protocol_id = 0;
     uint32_t echo_protocol_id = 0;
     for(;;) {
         e = read_exact(client, &resp, sizeof(resp));
@@ -116,6 +117,7 @@ int main(void) {
         }
         fprintf(stderr, "INFO: Protocol id=%u name=%s\n", protocol->id, protocol->name);
         if(strcmp(protocol->name, "echo") == 0) echo_protocol_id = protocol->id;
+        if(strcmp(protocol->name, "auth") == 0) auth_protocol_id = protocol->id;
         free(protocol);
     }
     if(!echo_protocol_id) {
@@ -123,6 +125,31 @@ int main(void) {
         return 1;
     } 
     fprintf(stderr, "Sent request successfully!\n");
+
+    if(auth_protocol_id) {
+        char buf[128];
+        fprintf(stderr, "server requires auth please provide userID:\n> ");
+        fflush(stdout);
+        char* _ = fgets(buf, sizeof(buf), stdin);
+        (void)_;
+        uint32_t userID = atoi(buf);
+        userID = htonl(userID);
+        Request req = {
+            .protocol_id = auth_protocol_id,
+            .func_id = 0,
+            .packet_id = packet_id++,
+            .packet_len = sizeof(uint32_t)
+        };
+        request_hton(&req);
+        write_exact(client, &req, sizeof(req));
+        write_exact(client, &userID, sizeof(userID));
+        e = read_exact(client, &resp, sizeof(resp));
+        assert(e == 1);
+        response_ntoh(&resp);
+        assert(resp.opcode == 0);
+        assert(resp.packet_len == 0);
+    }
+
     for(;;) {
         char buf[128];
         printf("> ");
@@ -147,6 +174,12 @@ int main(void) {
             fprintf(stderr, "We got packet_id = %u -> %u\n", resp.packet_id, ntohl(resp.packet_id));
             return 1;
         }
+
+        if(resp.opcode == -3){
+            fprintf(stderr, "Not Authenticated\n");
+            return 1;
+        }
+
         assert(resp.packet_len == strlen(buf));
 
         int n = read_exact(client, buf, resp.packet_len);

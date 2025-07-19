@@ -66,9 +66,15 @@ void response_hton(Response* res) {
 enum {
     ERROR_INVALID_PROTOCOL_ID = 1,
     ERROR_INVALID_FUNC_ID,
+    ERROR_NOT_AUTH
 };
 
-typedef void (*protocol_func_t)(int fd, Request* header);
+typedef struct{
+    int fd;
+    uint32_t userID;
+} Client;
+
+typedef void (*protocol_func_t)(Client* client, Request* header);
 typedef struct {
     const char* name;
     size_t funcs_count;
@@ -76,40 +82,45 @@ typedef struct {
 } Protocol;
 
 
-void coreGetProtocols(int fd, Request* header);
+void coreGetProtocols(Client* client, Request* header);
 protocol_func_t coreProtocolFuncs[] = {
     coreGetProtocols,
 };
 
-void echoEcho(int fd, Request* header) {
-    (void)fd;
-    (void)header;
+void echoEcho(Client* client, Request* header) {
     char buf[128];
     // TODO: send some error here:
     if(header->packet_len > sizeof(buf)) return;
-    gtread_exact(fd, buf, header->packet_len);
+    gtread_exact(client->fd, buf, header->packet_len);
     Response resp = {
         .packet_id = header->packet_id,
         .opcode = 0,
         .packet_len = header->packet_len
     };
     response_hton(&resp);
-    gtwrite_exact(fd, &resp, sizeof(resp));
-    gtwrite_exact(fd, buf, header->packet_len);
+    gtwrite_exact(client->fd, &resp, sizeof(resp));
+    gtwrite_exact(client->fd, buf, header->packet_len);
 }
 protocol_func_t echoProtocolFuncs[] = {
     echoEcho,
+};
+
+void authAuthenticate(Client* client, Request* header);
+protocol_func_t authProtocolFuncs[] = {
+    authAuthenticate,
 };
 
 #define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 #define PROTOCOL(__name, __funcs) { .name = __name, .funcs_count = ARRAY_LEN(__funcs),  .funcs = __funcs }
 Protocol protocols[] = {
     PROTOCOL("CORE", coreProtocolFuncs),
+    PROTOCOL("auth", authProtocolFuncs),
+
+    // CORE and auth need to be first in this order otherwise auth logic wont work
+
     PROTOCOL("echo", echoProtocolFuncs),
 };
-void coreGetProtocols(int fd, Request* header) {
-    (void)fd;
-    (void)header;
+void coreGetProtocols(Client* client, Request* header) {
     fprintf(stderr, "GetProtocols\n");
     for(size_t i = 0; i < ARRAY_LEN(protocols); ++i) {
         Response res_header;
@@ -117,51 +128,79 @@ void coreGetProtocols(int fd, Request* header) {
         res_header.opcode = 0;
         res_header.packet_len = sizeof(uint32_t) + strlen(protocols[i].name);
         response_hton(&res_header);
-        gtwrite_exact(fd, &res_header, sizeof(res_header));
+        gtwrite_exact(client->fd, &res_header, sizeof(res_header));
         uint32_t id = htonl(i);
-        gtwrite_exact(fd, &id, sizeof(id));
-        gtwrite_exact(fd, protocols[i].name, strlen(protocols[i].name));
+        gtwrite_exact(client->fd, &id, sizeof(id));
+        gtwrite_exact(client->fd, protocols[i].name, strlen(protocols[i].name));
     }
     Response res_header;
     res_header.packet_id = header->packet_id;
     res_header.opcode = 0;
     res_header.packet_len = 0;
     response_hton(&res_header);
-    gtwrite_exact(fd, &res_header, sizeof(res_header));
+    gtwrite_exact(client->fd, &res_header, sizeof(res_header));
 }
-void client_thread(void* fd_void) {
 
-    int fd = (uintptr_t)fd_void;
+void authAuthenticate(Client* client, Request* header){
+    fprintf(stderr, "Authenticate\n");
+
+    // TODO: send some error here:
+    if(header->packet_len != sizeof(uint32_t)) return;
+    gtread_exact(client->fd, &client->userID, sizeof(uint32_t));
+    client->userID = ntohl(client->userID);
+
+    Response res_header;
+    res_header.packet_id = header->packet_id;
+    res_header.opcode = 0;
+    res_header.packet_len = 0;
+    response_hton(&res_header);
+    gtwrite_exact(client->fd, &res_header, sizeof(res_header));
+}
+
+void client_thread(void* fd_void) {
+    Client client = {.fd = (uintptr_t)fd_void, .userID = (uint32_t)-1};
+
     Request req_header;
     Response res_header;
     for(;;) {
-        int n = gtread_exact(fd, &req_header, sizeof(req_header));
+        int n = gtread_exact(client.fd, &req_header, sizeof(req_header));
         if(n < 0) break;
         if(n == 0) break;
         request_ntoh(&req_header);
         if(req_header.protocol_id >= ARRAY_LEN(protocols)) {
-            fprintf(stderr, "%d: Invalid protocol_id: %u\n", fd, req_header.protocol_id);
+            fprintf(stderr, "%d: Invalid protocol_id: %u\n", client.fd, req_header.protocol_id);
             res_header.packet_id = req_header.packet_id;
             res_header.opcode = -ERROR_INVALID_PROTOCOL_ID;
             res_header.packet_len = 0;
             response_hton(&res_header);
-            gtwrite_exact(fd, &res_header, sizeof(res_header));
+            gtwrite_exact(client.fd, &res_header, sizeof(res_header));
             continue;
         }
         Protocol* proto = &protocols[req_header.protocol_id];
         if(req_header.func_id >= proto->funcs_count) {
-            fprintf(stderr, "%d: Invalid func_id: %u\n",  fd, req_header.func_id);
+            fprintf(stderr, "%d: Invalid func_id: %u\n",  client.fd, req_header.func_id);
             res_header.packet_id = req_header.packet_id;
             res_header.opcode = -ERROR_INVALID_FUNC_ID;
             res_header.packet_len = 0;
             response_hton(&res_header);
-            gtwrite_exact(fd, &res_header, sizeof(res_header));
+            gtwrite_exact(client.fd, &res_header, sizeof(res_header));
             continue;
         }
-        fprintf(stderr, "INFO: %d: %s func_id=%d\n", fd, proto->name, req_header.func_id);
-        proto->funcs[req_header.func_id](fd, &req_header);
+
+        if (client.userID == (uint32_t)-1 && req_header.protocol_id >= 2){
+            fprintf(stderr, "%d: Not Authenticated\n", client.fd);
+            res_header.packet_id = req_header.packet_id;
+            res_header.opcode = -ERROR_NOT_AUTH;
+            res_header.packet_len = 0;
+            response_hton(&res_header);
+            gtwrite_exact(client.fd, &res_header, sizeof(res_header));
+            continue;
+        }
+
+        fprintf(stderr, "INFO: %d: %s func_id=%d\n", client.fd, proto->name, req_header.func_id);
+        proto->funcs[req_header.func_id](&client, &req_header);
     }
-    closesocket(fd);
+    closesocket(client.fd);
     fprintf(stderr, "Disconnected!\n");
 }
 #define PORT 6969
