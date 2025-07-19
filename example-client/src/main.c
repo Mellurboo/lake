@@ -165,6 +165,8 @@ int main(void) {
         char buf[128];
 
         SendMsgRequest* msg = (SendMsgRequest*)buf;
+        msg->server_id = 0;
+        msg->channel_id = 0;
         printf("> \x1b[37m");
         fflush(stdout);
         char* _ = fgets(msg->msg, sizeof(buf) - sizeof(SendMsgRequest), stdin);
