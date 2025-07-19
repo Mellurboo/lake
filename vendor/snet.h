@@ -34,10 +34,22 @@ static void __attribute__((destructor)) _deinit_wsa() {
 # include <string.h>
 # include <errno.h>
 #endif
+
 const char* sneterr(void) {
 #ifdef _WIN32
-    // TODO: bruvsky pls implement on binbows opewating system for video james
-    return "";
+    static char snet_err_buffer[256];
+    int errorCode = WSAGetLastError();
+    
+    DWORD size = FormatMessageA(
+        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL,
+        errorCode,
+        MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US),
+        snet_err_buffer,
+        sizeof(snet_err_buffer),
+        NULL);
+
+    return snet_err_buffer;
 #else
     return strerror(errno);
 #endif
