@@ -115,6 +115,10 @@ typedef struct {
     uint32_t channel_id;
     char msg[];
 } SendMsgPacket;
+void sendMsgPacket_ntoh(SendMsgPacket* packet) {
+    packet->server_id = ntohl(packet->server_id);
+    packet->channel_id = ntohl(packet->channel_id);
+}
 #define MAX_MESSAGE 10000
 void sendMsg(Client* client, Request* header) {
     // NOTE: we hard assert its MORE because you need at least 1 character per message
@@ -130,6 +134,13 @@ void sendMsg(Client* client, Request* header) {
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read;
     fprintf(stderr, "TBD: Send message: %.*s\n", (int)msg_len, msg->msg);
+    Response resp = {
+        .packet_id = header->packet_id,
+        .opcode = 0,
+        .packet_len = 0
+    };
+    response_hton(&resp);
+    gtwrite_exact(client->fd, &resp, sizeof(resp));
 err_read:
     free(msg);
     return;

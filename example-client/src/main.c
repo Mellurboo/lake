@@ -18,6 +18,15 @@ void request_hton(Request* req) {
     req->packet_id = htonl(req->packet_id);
     req->packet_len = htonl(req->packet_len);
 }
+typedef struct {
+    uint32_t server_id;
+    uint32_t channel_id;
+    char msg[];
+} SendMsgRequest;
+void sendMsgRequest_hton(SendMsgRequest* packet) {
+    packet->server_id = htonl(packet->server_id);
+    packet->channel_id = htonl(packet->channel_id);
+}
 
 static intptr_t read_exact(uintptr_t fd, void* buf, size_t size) {
     while(size) {
@@ -97,7 +106,8 @@ int main(void) {
     Response resp; 
 
     uint32_t auth_protocol_id = 0;
-    uint32_t echo_protocol_id = 0;
+    // uint32_t echo_protocol_id = 0;
+    uint32_t msg_protocol_id = 0;
     for(;;) {
         e = read_exact(client, &resp, sizeof(resp));
         assert(e == 1);
@@ -116,19 +126,20 @@ int main(void) {
             return 1;
         }
         fprintf(stderr, "INFO: Protocol id=%u name=%s\n", protocol->id, protocol->name);
-        if(strcmp(protocol->name, "echo") == 0) echo_protocol_id = protocol->id;
+        // if(strcmp(protocol->name, "echo") == 0) echo_protocol_id = protocol->id;
         if(strcmp(protocol->name, "auth") == 0) auth_protocol_id = protocol->id;
+        if(strcmp(protocol->name, "msg")  == 0) msg_protocol_id = protocol->id; 
         free(protocol);
     }
-    if(!echo_protocol_id) {
-        fprintf(stderr, "FATAL: no echo protocol\n");
+    if(!msg_protocol_id) {
+        fprintf(stderr, "FATAL: no msg protocol\n");
         return 1;
     } 
     fprintf(stderr, "Sent request successfully!\n");
 
     if(auth_protocol_id) {
         char buf[128];
-        fprintf(stderr, "server requires auth please provide userID:\n> ");
+        printf("Server requires auth please provide userID:\n> ");
         fflush(stdout);
         char* _ = fgets(buf, sizeof(buf), stdin);
         (void)_;
@@ -152,20 +163,23 @@ int main(void) {
 
     for(;;) {
         char buf[128];
+
+        SendMsgRequest* msg = (SendMsgRequest*)buf;
         printf("> ");
         fflush(stdout);
-        char* _ = fgets(buf, sizeof(buf), stdin);
+        char* _ = fgets(msg->msg, sizeof(buf) - sizeof(SendMsgRequest), stdin);
         (void)_;
-        if(strcmp(buf, ":quit\n") == 0) break;
+        if(strcmp(msg->msg, ":quit\n") == 0) break;
         Request req = {
-            .protocol_id = echo_protocol_id,
+            .protocol_id = msg_protocol_id,
             .func_id = 0,
             .packet_id = 69,
-            .packet_len = strlen(buf)
+            .packet_len = sizeof(SendMsgRequest) + strlen(msg->msg)
         };
         request_hton(&req);
+        sendMsgRequest_hton(msg);
         write_exact(client, &req, sizeof(req));
-        write_exact(client, buf, strlen(buf));
+        write_exact(client, msg, sizeof(*msg) + strlen(msg->msg));
 
         e = read_exact(client, &resp, sizeof(resp));
         assert(e == 1);
@@ -175,19 +189,13 @@ int main(void) {
             return 1;
         }
 
-        if(resp.opcode == -3){
+        if((int)resp.opcode == -3){
             fprintf(stderr, "Not Authenticated\n");
             return 1;
         }
+        assert(resp.packet_len == 0);
+        assert(resp.opcode == 0);
 
-        assert(resp.packet_len == strlen(buf));
-
-        int n = read_exact(client, buf, resp.packet_len);
-        if(n <= 0) {
-            fprintf(stderr, "ERROR: failed to read response: %s\n", sneterr());
-            break;
-        }
-        printf("%.*s", resp.packet_len, buf);
     }
     closesocket(client);
     return 0;
