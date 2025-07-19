@@ -4,7 +4,10 @@
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
+#include "darray.h"
 
+
+#define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 #ifdef _WIN32
 # define NEWLINE "\n\r"
 #else
@@ -40,6 +43,23 @@ static intptr_t gtwrite_exact(uintptr_t fd, const void* buf, size_t size) {
     return 1;
 }
 
+#ifdef _WIN32
+#else
+# include <time.h>
+#endif
+
+uint64_t time_unix_milis(void) {
+#ifdef _WIN32
+    // TODO: bruvsky pls implement this for binbows opewating system for video james
+    return 0;
+#else
+    struct timespec now;
+    timespec_get(&now, TIME_UTC);
+    return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
+#endif
+}
+
+
 // Generic request header
 typedef struct {
     uint32_t protocol_id;
@@ -63,6 +83,49 @@ void response_hton(Response* res) {
     res->packet_id = htonl(res->packet_id);
     res->opcode = htonl(res->opcode);
     res->packet_len = htonl(res->packet_len);
+}
+
+typedef uint64_t userID;
+typedef struct {
+    size_t content_len;
+    char* content;
+    uint64_t milis;
+    uint32_t author;
+} Message;
+typedef struct {
+    Message* items;
+    size_t len, cap;
+} Messages;
+typedef struct {
+    Messages msgs;
+} Channel;
+typedef struct {
+    Channel channel;
+    uint32_t max_user_id;
+} DM;
+typedef struct {
+    DM* items;
+    size_t len, cap;
+} DMs;
+typedef struct {
+    const char* username;
+    DMs dms;
+} User;
+enum {
+    USER_F1L1P,
+    USER_DCRAFTBG,
+    USERS_COUNT
+};
+static User users[USERS_COUNT] = { 0 };
+static DM* get_or_insert_dm(User* user, uint32_t max_user_id) {
+    for(size_t i = 0; i < user->dms.len; ++i) {
+        DM* dm = &user->dms.items[i];
+        if(dm->max_user_id == max_user_id) return dm;
+    }
+    da_push(&user->dms, ((DM){0}));
+    DM* dm = &user->dms.items[user->dms.len-1];
+    dm->max_user_id = max_user_id;
+    return dm;
 }
 enum {
     ERROR_INVALID_PROTOCOL_ID = 1,
@@ -124,16 +187,31 @@ void sendMsg(Client* client, Request* header) {
     // NOTE: we hard assert its MORE because you need at least 1 character per message
     // TODO: send some error here:
     if(header->packet_len <= sizeof(SendMsgPacket)) return;
+    SendMsgPacket packet = { 0 };
+    int n = gtread_exact(client->fd, &packet, sizeof(packet));
+    // TODO: send some error here:
+    if(n < 0 || n == 0) goto err_read0;
     size_t msg_len = header->packet_len - sizeof(SendMsgPacket);
     // TODO: send some error here:
     if(msg_len > MAX_MESSAGE) return;
-    SendMsgPacket* msg = malloc(header->packet_len);
+    char* msg = malloc(msg_len);
     // TODO: send some error here:
     if(!msg) return;
-    int n = gtread_exact(client->fd, msg, header->packet_len);
+    n = gtread_exact(client->fd, msg, msg_len);
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read;
-    fprintf(stderr, "TBD: Send message: %.*s\n", (int)msg_len, msg->msg);
+    // TODO: utf8 and isgraphic verifications
+
+    size_t max_user_id = client->userID < packet.channel_id ? packet.channel_id : client->userID;
+    size_t min_user_id = client->userID < packet.channel_id ? client->userID : packet.channel_id;
+    DM* dm = get_or_insert_dm(&users[min_user_id], max_user_id);
+    Message message = {
+        .content_len = msg_len,
+        .content = msg,
+        .milis = time_unix_milis(),
+        .author = client->userID,
+    };
+    da_push(&dm->channel.msgs, message);
     Response resp = {
         .packet_id = header->packet_id,
         .opcode = 0,
@@ -141,14 +219,15 @@ void sendMsg(Client* client, Request* header) {
     };
     response_hton(&resp);
     gtwrite_exact(client->fd, &resp, sizeof(resp));
+    return;
 err_read:
     free(msg);
+err_read0:
     return;
 }
 protocol_func_t msgProtoclFuncs[] = {
     sendMsg,
 };
-#define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 #define PROTOCOL(__name, __funcs) { .name = __name, .funcs_count = ARRAY_LEN(__funcs),  .funcs = __funcs }
 Protocol protocols[] = {
     PROTOCOL("CORE", coreProtocolFuncs),
@@ -187,7 +266,9 @@ void authAuthenticate(Client* client, Request* header){
     if(header->packet_len != sizeof(uint32_t)) return;
     gtread_exact(client->fd, &client->userID, sizeof(uint32_t));
     client->userID = ntohl(client->userID);
-
+    // TODO: send some error here:
+    if(client->userID >= USERS_COUNT) return;
+    fprintf(stderr, "Welcome %s!\n", users[client->userID].username);
     Response res_header;
     res_header.packet_id = header->packet_id;
     res_header.opcode = 0;
@@ -245,7 +326,8 @@ void client_thread(void* fd_void) {
 #define PORT 6969
 int main(void) {
     gtinit();
-    for(size_t i = 0; i < 20; ++i) gtyield();
+    users[USER_F1L1P].username = "f1l1p";
+    users[USER_DCRAFTBG].username = "dcraftbg";
     int server = socket(AF_INET, SOCK_STREAM, 0);
     if(server < 0) {
         fatal("Could not create server socket: %s", sneterr());
