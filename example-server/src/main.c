@@ -3,6 +3,7 @@
 #include <snet.h>
 #include <assert.h>
 #include <string.h>
+#include <stdlib.h>
 
 #ifdef _WIN32
 # define NEWLINE "\n\r"
@@ -104,12 +105,38 @@ void echoEcho(Client* client, Request* header) {
 protocol_func_t echoProtocolFuncs[] = {
     echoEcho,
 };
-
 void authAuthenticate(Client* client, Request* header);
 protocol_func_t authProtocolFuncs[] = {
     authAuthenticate,
 };
 
+typedef struct {
+    uint32_t server_id;
+    uint32_t channel_id;
+    char msg[];
+} SendMsgPacket;
+#define MAX_MESSAGE 10000
+void sendMsg(Client* client, Request* header) {
+    // NOTE: we hard assert its MORE because you need at least 1 character per message
+    // TODO: send some error here:
+    if(header->packet_len <= sizeof(SendMsgPacket)) return;
+    size_t msg_len = header->packet_len - sizeof(SendMsgPacket);
+    // TODO: send some error here:
+    if(msg_len > MAX_MESSAGE) return;
+    SendMsgPacket* msg = malloc(header->packet_len);
+    // TODO: send some error here:
+    if(!msg) return;
+    int n = gtread_exact(client->fd, msg, header->packet_len);
+    // TODO: send some error here:
+    if(n < 0 || n == 0) goto err_read;
+    fprintf(stderr, "TBD: Send message: %.*s\n", (int)msg_len, msg->msg);
+err_read:
+    free(msg);
+    return;
+}
+protocol_func_t msgProtoclFuncs[] = {
+    sendMsg,
+};
 #define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 #define PROTOCOL(__name, __funcs) { .name = __name, .funcs_count = ARRAY_LEN(__funcs),  .funcs = __funcs }
 Protocol protocols[] = {
@@ -119,6 +146,7 @@ Protocol protocols[] = {
     // CORE and auth need to be first in this order otherwise auth logic wont work
 
     PROTOCOL("echo", echoProtocolFuncs),
+    PROTOCOL("msg", msgProtoclFuncs),
 };
 void coreGetProtocols(Client* client, Request* header) {
     fprintf(stderr, "GetProtocols\n");
