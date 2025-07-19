@@ -165,11 +165,13 @@ int main(void) {
         char buf[128];
 
         SendMsgRequest* msg = (SendMsgRequest*)buf;
-        printf("> ");
+        printf("> \x1b[37m");
         fflush(stdout);
         char* _ = fgets(msg->msg, sizeof(buf) - sizeof(SendMsgRequest), stdin);
         (void)_;
         if(strcmp(msg->msg, ":quit\n") == 0) break;
+        printf("\x1b[0m");
+        fflush(stdout);
         Request req = {
             .protocol_id = msg_protocol_id,
             .func_id = 0,
@@ -195,7 +197,8 @@ int main(void) {
         }
         assert(resp.packet_len == 0);
         assert(resp.opcode == 0);
-
+        printf("\x1b[A> %s", msg->msg);
+        fflush(stdout);
     }
     closesocket(client);
     return 0;
