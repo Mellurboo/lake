@@ -191,6 +191,7 @@ void sendMsg(Client* client, Request* header) {
     int n = gtread_exact(client->fd, &packet, sizeof(packet));
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read0;
+    sendMsgPacket_ntoh(&packet);
     size_t msg_len = header->packet_len - sizeof(SendMsgPacket);
     // TODO: send some error here:
     if(msg_len > MAX_MESSAGE) return;
@@ -202,6 +203,10 @@ void sendMsg(Client* client, Request* header) {
     if(n < 0 || n == 0) goto err_read;
     // TODO: utf8 and isgraphic verifications
 
+    // TODO: we assert its DMs
+    assert(packet.server_id == 0);
+    // TODO: we assert the channel is a valid user ID
+    assert(packet.channel_id < USERS_COUNT);
     size_t max_user_id = client->userID < packet.channel_id ? packet.channel_id : client->userID;
     size_t min_user_id = client->userID < packet.channel_id ? client->userID : packet.channel_id;
     DM* dm = get_or_insert_dm(&users[min_user_id], max_user_id);
