@@ -6,6 +6,22 @@
 #include <errno.h>
 #include <stdlib.h>
 
+#ifdef _WIN32
+#else
+# include <time.h>
+#endif
+
+uint64_t time_unix_milis(void) {
+#ifdef _WIN32
+    // TODO: bruvsky pls implement this for binbows opewating system for video james
+    return 0;
+#else
+    struct timespec now;
+    timespec_get(&now, TIME_UTC);
+    return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
+#endif
+}
+
 typedef struct {
     uint32_t protocol_id;
     uint32_t func_id;
@@ -47,6 +63,31 @@ static intptr_t write_exact(uintptr_t fd, const void* buf, size_t size) {
         size -= (size_t)e;
     }
     return 1;
+}
+typedef struct {
+    uint32_t server_id;
+    uint32_t channel_id;
+    uint32_t milis_low;
+    uint32_t milis_high;
+    uint32_t count;
+} MessagesBeforeRequest;
+void messagesBeforeRequest_hton(MessagesBeforeRequest* packet) {
+    packet->server_id = htonl(packet->server_id);
+    packet->channel_id = htonl(packet->channel_id);
+    packet->milis_low = htonl(packet->milis_low);
+    packet->milis_high = htonl(packet->milis_high);
+    packet->count = htonl(packet->count);
+}
+typedef struct {
+    uint32_t author_id;
+    uint32_t milis_low;
+    uint32_t milis_high;
+    /*content[packet_len - sizeof(MessagesBeforeResponse)]*/
+} MessagesBeforeResponse;
+void messagesBeforeResponse_ntoh(MessagesBeforeResponse* packet) {
+    packet->author_id = ntohl(packet->author_id);
+    packet->milis_low = ntohl(packet->milis_low);
+    packet->milis_high = ntohl(packet->milis_high);
 }
 // Generic response header
 typedef struct {
@@ -160,13 +201,58 @@ int main(void) {
         assert(resp.opcode == 0);
         assert(resp.packet_len == 0);
     }
-
+    uint32_t dming = ~0;
+    {
+        char buf[128];
+        printf("Who you wanna DM?\n> ");
+        fflush(stdout);
+        char* _ = fgets(buf, sizeof(buf), stdin);
+        (void)_;
+        dming = atoi(buf);
+    }
+    {
+        Request request = {
+            .protocol_id = msg_protocol_id,
+            .func_id = 1,
+            .packet_id = 69,
+            .packet_len = sizeof(MessagesBeforeRequest)
+        };
+        request_hton(&request);
+        uint64_t milis = time_unix_milis();
+        MessagesBeforeRequest msgs_request = {
+            .server_id = 0,
+            .channel_id = dming,
+            .milis_low = milis,
+            .milis_high = milis >> 32,
+            .count = 100,
+        };
+        messagesBeforeRequest_hton(&msgs_request);
+        write_exact(client, &request, sizeof(request));
+        write_exact(client, &msgs_request, sizeof(msgs_request));
+        char msg_buf[1024];
+        Response resp;
+        fprintf(stderr, "We in here:\n");
+        // TODO: ^^verify things
+        for(;;) {
+            read_exact(client, &resp, sizeof(resp));
+            response_ntoh(&resp);
+            // TODO: ^^verify things
+            // TODO: I don't know how to handle such case:
+            if(resp.packet_len == 0) break;
+            if(resp.packet_len > sizeof(msg_buf)) abort();
+            read_exact(client, msg_buf, resp.packet_len);
+            MessagesBeforeResponse* msg_resp = (MessagesBeforeResponse*)msg_buf;
+            messagesBeforeResponse_ntoh(msg_resp);
+            uint64_t milis = (((uint64_t)msg_resp->milis_high) << 32) | (uint64_t)msg_resp->milis_low;
+            fprintf(stderr, "- (%llu %u) %.*s", (unsigned long long)milis, msg_resp->author_id, (int)(resp.packet_len - sizeof(MessagesBeforeResponse)), (char*)(msg_resp + 1));
+        }
+    }
     for(;;) {
         char buf[128];
 
         SendMsgRequest* msg = (SendMsgRequest*)buf;
         msg->server_id = 0;
-        msg->channel_id = 0;
+        msg->channel_id = dming;
         printf("> \x1b[37m");
         fflush(stdout);
         char* _ = fgets(msg->msg, sizeof(buf) - sizeof(SendMsgRequest), stdin);
@@ -193,7 +279,7 @@ int main(void) {
             return 1;
         }
 
-        if((int)resp.opcode == -3){
+        if((int)resp.opcode == -3) {
             fprintf(stderr, "Not Authenticated\n");
             return 1;
         }

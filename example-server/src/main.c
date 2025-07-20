@@ -4,8 +4,8 @@
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
+#include <list_head.h>
 #include "darray.h"
-
 
 #define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 #ifdef _WIN32
@@ -96,8 +96,14 @@ typedef struct {
     Message* items;
     size_t len, cap;
 } Messages;
+
+typedef struct {
+    uint32_t* items;
+    size_t len, cap;
+} UserIds;
 typedef struct {
     Messages msgs;
+    UserIds participants;
 } Channel;
 typedef struct {
     Channel channel;
@@ -110,6 +116,10 @@ typedef struct {
 typedef struct {
     const char* username;
     DMs dms;
+    // TODO: Mutex this bullsheizung if we do threading
+    // List of active connections
+    // on that thinger
+    struct list_head clients;
 } User;
 enum {
     USER_F1L1P,
@@ -127,6 +137,18 @@ static DM* get_or_insert_dm(User* user, uint32_t max_user_id) {
     dm->max_user_id = max_user_id;
     return dm;
 }
+// TODO: make this failable and return an error (int)
+static Channel* get_or_insert_channel(uint32_t server_id, uint32_t channel_id, uint32_t author_id) {
+    if(server_id == 0) {
+        // TODO: we assert the channel is a valid user ID
+        assert(channel_id < USERS_COUNT);
+        size_t max_user_id = author_id < channel_id ? channel_id : author_id;
+        size_t min_user_id = author_id < channel_id ? author_id : channel_id;
+        return &get_or_insert_dm(&users[min_user_id], max_user_id)->channel;
+    }
+    // TODO: we assert its DMs
+    assert(false && "To be done: everything other than DMs");
+}
 enum {
     ERROR_INVALID_PROTOCOL_ID = 1,
     ERROR_INVALID_FUNC_ID,
@@ -134,8 +156,10 @@ enum {
 };
 
 typedef struct{
+    struct list_head list;
     int fd;
     uint32_t userID;
+    uint32_t notifyID;
 } Client;
 
 typedef void (*protocol_func_t)(Client* client, Request* header);
@@ -182,6 +206,40 @@ void sendMsgPacket_ntoh(SendMsgPacket* packet) {
     packet->server_id = ntohl(packet->server_id);
     packet->channel_id = ntohl(packet->channel_id);
 }
+typedef struct {
+    uint32_t server_id;
+    uint32_t channel_id;
+    uint32_t milis_low;
+    uint32_t milis_high;
+    uint32_t count;
+} MessagesBeforePacket;
+void messagesBeforePacket_ntoh(MessagesBeforePacket* packet) {
+    packet->server_id = ntohl(packet->server_id);
+    packet->channel_id = ntohl(packet->channel_id);
+    packet->milis_low = ntohl(packet->milis_low);
+    packet->milis_high = ntohl(packet->milis_high);
+    packet->count = ntohl(packet->count);
+}
+typedef struct {
+    uint32_t author_id;
+    uint32_t milis_low;
+    uint32_t milis_high;
+    /*content[packet_len - sizeof(MessagesBeforeResponse)]*/
+} MessagesBeforeResponse;
+void messagesBeforeResponse_hton(MessagesBeforeResponse* packet) {
+    packet->author_id = htonl(packet->author_id);
+    packet->milis_low = htonl(packet->milis_low);
+    packet->milis_high = htonl(packet->milis_high);
+}
+typedef struct {
+    uint32_t server_id;
+    uint32_t channel_id;
+} Notification;
+
+void notification_hton(Notification* packet) {
+    packet->server_id = ntohl(packet->server_id);
+    packet->channel_id = ntohl(packet->channel_id);
+}
 #define MAX_MESSAGE 10000
 void sendMsg(Client* client, Request* header) {
     // NOTE: we hard assert its MORE because you need at least 1 character per message
@@ -202,21 +260,36 @@ void sendMsg(Client* client, Request* header) {
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read;
     // TODO: utf8 and isgraphic verifications
-
-    // TODO: we assert its DMs
-    assert(packet.server_id == 0);
-    // TODO: we assert the channel is a valid user ID
-    assert(packet.channel_id < USERS_COUNT);
-    size_t max_user_id = client->userID < packet.channel_id ? packet.channel_id : client->userID;
-    size_t min_user_id = client->userID < packet.channel_id ? client->userID : packet.channel_id;
-    DM* dm = get_or_insert_dm(&users[min_user_id], max_user_id);
+    Channel* channel = get_or_insert_channel(packet.server_id, packet.channel_id, client->userID);
     Message message = {
         .content_len = msg_len,
         .content = msg,
         .milis = time_unix_milis(),
         .author = client->userID,
     };
-    da_push(&dm->channel.msgs, message);
+    da_push(&channel->msgs, message);
+    for(size_t i = 0; i < channel->participants.len; ++i) {
+        uint32_t id = channel->participants.items[i];
+        if(id == client->userID) continue;
+        User* user = &users[id];
+        list_foreach(user_conn_list, &user->clients) {
+            Client* user_conn = (Client*)user_conn_list;
+            if(!user_conn->notifyID) continue;
+            Response resp = {
+                .packet_id = user_conn->notifyID,
+                .opcode = 0,
+                .packet_len = sizeof(Notification)
+            };
+            response_hton(&resp);
+            Notification notif = {
+                .server_id = packet.server_id,
+                .channel_id = packet.channel_id,
+            };
+            // TODO: don't block here? And/or spawn a gt thread for each user we're notifying
+            send(user_conn->fd, &resp, sizeof(Response), 0);
+            send(user_conn->fd, &notif, sizeof(Notification), 0);
+        }
+    }
     Response resp = {
         .packet_id = header->packet_id,
         .opcode = 0,
@@ -230,8 +303,71 @@ err_read:
 err_read0:
     return;
 }
-protocol_func_t msgProtoclFuncs[] = {
+void getMsgsBefore(Client* client, Request* header) {
+    // TODO: send some error here:
+    if(header->packet_len != sizeof(MessagesBeforePacket)) return;
+    MessagesBeforePacket packet;
+    int n = gtread_exact(client->fd, &packet, sizeof(packet));
+    // TODO: send some error here:
+    if(n < 0 || n == 0) goto err_read0;
+    messagesBeforePacket_ntoh(&packet);
+    uint64_t milis = (((uint64_t)packet.milis_high) << 32) | (uint64_t)packet.milis_low;
+
+    size_t max_user_id = client->userID < packet.channel_id ? packet.channel_id : client->userID;
+    size_t min_user_id = client->userID < packet.channel_id ? client->userID : packet.channel_id;
+    DM* dm = get_or_insert_dm(&users[min_user_id], max_user_id);
+    for(size_t i = dm->channel.msgs.len; i > 0 && packet.count > 0; --i) {
+        Message* msg = &dm->channel.msgs.items[i - 1];
+        if(msg->milis < milis) {
+            Response resp = {
+                .packet_id = header->packet_id,
+                .opcode = 0,
+                .packet_len = msg->content_len + sizeof(MessagesBeforeResponse),
+            };
+            MessagesBeforeResponse msg_resp = {
+                .author_id = msg->author,
+                .milis_low = msg->milis,
+                .milis_high = msg->milis >> 32,
+            };
+            response_hton(&resp);
+            messagesBeforeResponse_hton(&msg_resp);
+            gtwrite_exact(client->fd, &resp, sizeof(resp));
+            gtwrite_exact(client->fd, &msg_resp, sizeof(msg_resp));
+            gtwrite_exact(client->fd, msg->content, msg->content_len);
+            packet.count--;
+        }
+    } 
+    Response resp = {
+        .packet_id = header->packet_id,
+        .opcode = 0,
+        .packet_len = 0,
+    };
+    response_hton(&resp);
+    gtwrite_exact(client->fd, &resp, sizeof(resp));
+err_read0:
+    return;
+} 
+protocol_func_t msgProtocolFuncs[] = {
     sendMsg,
+    getMsgsBefore,
+};
+
+void notify(Client* client, Request* header) {
+    // TODO: send some error here:
+    if(header->packet_len != 0) return;
+    // TODO: send some error here:
+    if(header->packet_id == 0) return;
+    client->notifyID = header->packet_id;
+    Response resp = {
+        .packet_id = header->packet_id,
+        .opcode = 0,
+        .packet_len = 0,
+    };
+    response_hton(&resp);
+    gtwrite_exact(client->fd, &resp, sizeof(resp));
+}
+protocol_func_t notifyProtocolFuncs[] = {
+    notify,
 };
 #define PROTOCOL(__name, __funcs) { .name = __name, .funcs_count = ARRAY_LEN(__funcs),  .funcs = __funcs }
 Protocol protocols[] = {
@@ -241,7 +377,8 @@ Protocol protocols[] = {
     // CORE and auth need to be first in this order otherwise auth logic wont work
 
     PROTOCOL("echo", echoProtocolFuncs),
-    PROTOCOL("msg", msgProtoclFuncs),
+    PROTOCOL("msg", msgProtocolFuncs),
+    PROTOCOL("notify", notifyProtocolFuncs),
 };
 void coreGetProtocols(Client* client, Request* header) {
     fprintf(stderr, "GetProtocols\n");
@@ -270,9 +407,13 @@ void authAuthenticate(Client* client, Request* header){
     // TODO: send some error here:
     if(header->packet_len != sizeof(uint32_t)) return;
     gtread_exact(client->fd, &client->userID, sizeof(uint32_t));
-    client->userID = ntohl(client->userID);
+    uint32_t userID = ntohl(client->userID);
     // TODO: send some error here:
-    if(client->userID >= USERS_COUNT) return;
+    if(userID >= USERS_COUNT) return;
+    client->userID = userID;
+    // TODO: mutex this sheizung
+    list_remove(&client->list);
+    list_insert(&users[client->userID].clients, &client->list);
     fprintf(stderr, "Welcome %s!\n", users[client->userID].username);
     Response res_header;
     res_header.packet_id = header->packet_id;
@@ -284,7 +425,7 @@ void authAuthenticate(Client* client, Request* header){
 
 void client_thread(void* fd_void) {
     Client client = {.fd = (uintptr_t)fd_void, .userID = (uint32_t)-1};
-
+    list_init(&client.list);
     Request req_header;
     Response res_header;
     for(;;) {
@@ -333,6 +474,8 @@ int main(void) {
     gtinit();
     users[USER_F1L1P].username = "f1l1p";
     users[USER_DCRAFTBG].username = "dcraftbg";
+    list_init(&users[USER_F1L1P].clients);
+    list_init(&users[USER_DCRAFTBG].clients);
     int server = socket(AF_INET, SOCK_STREAM, 0);
     if(server < 0) {
         fatal("Could not create server socket: %s", sneterr());
