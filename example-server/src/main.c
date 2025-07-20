@@ -278,7 +278,7 @@ void sendMsg(Client* client, Request* header) {
             Response resp = {
                 .packet_id = user_conn->notifyID,
                 .opcode = 0,
-                .packet_len = sizeof(Notification)
+                .packet_len = sizeof(Notification) + msg_len
             };
             response_hton(&resp);
             Notification notif = {
@@ -288,6 +288,7 @@ void sendMsg(Client* client, Request* header) {
             // TODO: don't block here? And/or spawn a gt thread for each user we're notifying
             send(user_conn->fd, &resp, sizeof(Response), 0);
             send(user_conn->fd, &notif, sizeof(Notification), 0);
+            send(user_conn->fd, msg, msg_len, 0);
         }
     }
     Response resp = {
