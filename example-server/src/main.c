@@ -285,6 +285,7 @@ void sendMsg(Client* client, Request* header) {
                 .server_id = packet.server_id,
                 .channel_id = packet.channel_id,
             };
+            notification_hton(&notif);
             // TODO: don't block here? And/or spawn a gt thread for each user we're notifying
             send(user_conn->fd, &resp, sizeof(Response), 0);
             send(user_conn->fd, &notif, sizeof(Notification), 0);
