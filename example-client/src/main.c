@@ -5,11 +5,15 @@
 #include <string.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <stui.h>
+#include <darray.h>
 
 #ifdef _WIN32
 #else
 # include <time.h>
 #endif
+
+#define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 
 uint64_t time_unix_milis(void) {
 #ifdef _WIN32
@@ -105,6 +109,67 @@ typedef struct {
     char name[];
 } Protocol;
 #define PORT 6969
+typedef struct {
+    uint64_t milis;
+    char* author_name;
+    uint32_t content_len;
+    char* content;
+} Message;
+
+typedef struct {
+    uint16_t l, t, r, b;
+} UIBox;
+inline UIBox content_box(size_t term_width, size_t term_height) {
+    return (UIBox) { .l = 1, .t = 1, .r = term_width - 1, .b = term_height - 1 };
+}
+
+
+typedef struct {
+    Message* items;
+    size_t len, cap;
+} Messages;
+void render_messages(UIBox box, Messages* msgs) {
+    size_t box_width = box.r - box.l;
+    int32_t y_offset_start = box.b - box.t - 1;
+    for(size_t i = msgs->len; i > 0; --i) {
+        Message* msg = &msgs->items[i-1];
+
+        char *content_cursor = msg->content, *content_end = msg->content + msg->content_len;
+
+        char prefix[256];
+        time_t msg_time_secs = msg->milis / 1000;
+        struct tm* msg_time = localtime(&msg_time_secs);
+        size_t prefix_len = snprintf(prefix, sizeof(prefix), "<%02d/%02d/%02d> %s: ", msg_time->tm_mday, msg_time->tm_mon + 1, msg_time->tm_year % 100, msg->author_name);
+        size_t msg_lines = (prefix_len + msg->content_len + (box_width - 1)) / box_width;
+        y_offset_start -= msg_lines;
+        char* prefix_cursor = prefix;
+
+        size_t y_offset_offset_start = 0;
+        size_t x_offset_start = 0;
+        while(*prefix_cursor) {
+            if(x_offset_start >= box_width) {
+                x_offset_start = 0;
+                y_offset_offset_start++;
+            }
+            stui_putchar(box.l + x_offset_start, box.t + y_offset_start + y_offset_offset_start, *prefix_cursor);
+            x_offset_start++;
+            prefix_cursor++;
+        }
+        for(size_t j = y_offset_offset_start; j < msg_lines; ++j, content_cursor += box_width - x_offset_start) {
+            if(y_offset_start + (int32_t)j < 0) continue;
+            for(size_t x_offset = 0; x_offset < box_width - x_offset_start && content_cursor + x_offset < content_end; ++x_offset) {
+                stui_putchar(box.l + x_offset_start + x_offset, box.t + y_offset_start + (int32_t)j, content_cursor[x_offset]);
+            }
+            x_offset_start = 0;
+        }
+        if(y_offset_start < 0) break;
+    }
+}
+
+inline Message cstr_msg(const char* author, const char* content) {
+    return (Message){.milis = time_unix_milis(), .author_name = (char*)author, .content_len = strlen(content), .content = (char*)content };
+}
+
 int main(void) {
     int client = socket(AF_INET, SOCK_STREAM, 0); 
     if(client < 0) {
@@ -210,6 +275,7 @@ int main(void) {
         (void)_;
         dming = atoi(buf);
     }
+    Messages msgs = {0};
     {
         Request request = {
             .protocol_id = msg_protocol_id,
@@ -229,7 +295,6 @@ int main(void) {
         messagesBeforeRequest_hton(&msgs_request);
         write_exact(client, &request, sizeof(request));
         write_exact(client, &msgs_request, sizeof(msgs_request));
-        char msg_buf[1024];
         Response resp;
         fprintf(stderr, "We in here:\n");
         // TODO: ^^verify things
@@ -239,17 +304,40 @@ int main(void) {
             // TODO: ^^verify things
             // TODO: I don't know how to handle such case:
             if(resp.packet_len == 0) break;
-            if(resp.packet_len > sizeof(msg_buf)) abort();
-            read_exact(client, msg_buf, resp.packet_len);
-            MessagesBeforeResponse* msg_resp = (MessagesBeforeResponse*)msg_buf;
-            messagesBeforeResponse_ntoh(msg_resp);
-            uint64_t milis = (((uint64_t)msg_resp->milis_high) << 32) | (uint64_t)msg_resp->milis_low;
-            fprintf(stderr, "- (%llu %u) %.*s", (unsigned long long)milis, msg_resp->author_id, (int)(resp.packet_len - sizeof(MessagesBeforeResponse)), (char*)(msg_resp + 1));
+            if(resp.packet_len <= sizeof(MessagesBeforeResponse)) abort();
+            size_t content_len = resp.packet_len - sizeof(MessagesBeforeResponse);
+            char* content = malloc(content_len);
+            MessagesBeforeResponse msgs_resp;
+            read_exact(client, &msgs_resp, sizeof(MessagesBeforeResponse));
+            messagesBeforeResponse_ntoh(&msgs_resp);
+            uint64_t milis = (((uint64_t)msgs_resp.milis_high) << 32) | (uint64_t)msgs_resp.milis_low;
+            read_exact(client, content, content_len);
+
+            // TODO: unhardcode this and local user hashmap.
+            static const char* author_names[] = {
+                "f1l1p",
+                "dcraftbg"
+            };
+            // TODO: verify all this sheize^
+            Message msg = {
+                .author_name = msgs_resp.author_id < ARRAY_LEN(author_names) ? (char*)author_names[msgs_resp.author_id] : "UNKNOWN",
+                .milis = milis,
+                .content_len = content_len,
+                .content = content
+            };
+            da_insert(&msgs, 0, msg);
         }
     }
-    for(;;) {
-        char buf[128];
 
+    stui_clear();
+    size_t term_width, term_height;
+    stui_term_get_size(&term_width, &term_height);
+    stui_setsize(term_width, term_height);
+    for(;;) {
+        stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
+        render_messages(content_box(term_width, term_height), &msgs);
+        stui_refresh();
+        char buf[128];
         SendMsgRequest* msg = (SendMsgRequest*)buf;
         msg->server_id = 0;
         msg->channel_id = dming;

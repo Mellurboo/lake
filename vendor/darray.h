@@ -28,4 +28,4 @@
         memmove(&(da)->items[(index) + 1], &(da)->items[(index)], ((da)->len - (index)) * sizeof(*(da)->items));\
         (da)->items[(index)] = (value);\
         (da)->len++;\
- 
+   } while(0)

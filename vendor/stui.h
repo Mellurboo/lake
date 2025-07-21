@@ -24,7 +24,6 @@ void stui_clear(void);
 #define STUI_TERM_FLAG_INSTANT (1 << 1)
 typedef uint8_t stui_term_flag_t;
 
-
 void stui_term_get_size(size_t *w, size_t *h);
 stui_term_flag_t stui_term_get_flags(void);
 void stui_term_set_flags(stui_term_flag_t flags);
@@ -41,6 +40,11 @@ static void stui_term_enable_instant(void) {
 static void stui_term_disable_instant(void) {
     stui_term_set_flags(stui_term_get_flags() & ~STUI_TERM_FLAG_INSTANT);
 }
+
+
+// UI thingies
+void stui_window_border(size_t x, size_t y, size_t w, size_t h, int tb, int lr, int corner);
+
 
 #ifdef STUI_IMPLEMENTATION
 #define STUI_BUFFER_COUNT 2
