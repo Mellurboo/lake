@@ -316,7 +316,11 @@ void redraw(void) {
     stui_refresh();
     stui_goto(x, term_height - 1);
 }
-int main(void) {
+const char* shift_args(int *argc, const char ***argv) {
+    if((*argc) <= 0) return NULL;
+    return ((*argc)--, *((*argv)++));
+}
+int main(int argc, const char** argv) {
     gtinit();
     prev_term_flags = stui_term_get_flags();
     atexit(restore_prev_term);
@@ -332,9 +336,22 @@ int main(void) {
         return 1;
     }
     const char* hostname = "localhost";
+    uint32_t port = 6969;
+
+    while(argc) {
+        const char* arg = shift_args(&argc, &argv);
+        if(strcmp(arg, "-p") == 0) {
+            assert(argc && "PORT PLS MOTHERFUCKA");
+            port = atoi(shift_args(&argc, &argv));
+        } else if(strcmp(arg, "-ip") == 0) {
+            assert(argc && "IP PLS MOTHERFUCKA");
+            hostname = shift_args(&argc, &argv);
+        }
+    }
+
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
+    server_addr.sin_port = htons(port);
     if(inet_pton(AF_INET, hostname, &server_addr.sin_addr) <= 0) {
         struct hostent *he = gethostbyname(hostname);
         if (he == NULL) {
