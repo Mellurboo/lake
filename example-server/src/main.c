@@ -20,10 +20,33 @@
 #define error(...) log(ERROR, __VA_ARGS__)
 #define fatal(...) log(FATAL, __VA_ARGS__)
 
-static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
+typedef struct Client Client;
+
+typedef size_t (*client_read_func_t)(Client* client, void* buf, size_t size);
+typedef size_t (*client_write_func_t)(Client* client, const void* buf, size_t size);
+
+struct Client{
+    struct list_head list;
+    int fd;
+    uint32_t userID;
+    uint32_t notifyID;
+
+    client_read_func_t read;
+    client_write_func_t write;
+};
+
+static size_t unsecure_read(Client* client, void* buf, size_t size){
+    return recv(client->fd, buf, size, 0);
+}
+
+static size_t unsecure_write(Client* client, const void* buf, size_t size){
+    return send(client->fd, buf, size, 0);
+}
+
+static intptr_t gtread_exact(Client* client, void* buf, size_t size) {
     while(size) {
-        gtblockfd(fd, GTBLOCKIN);
-        intptr_t e = recv(fd, buf, size, 0);
+        gtblockfd(client->fd, GTBLOCKIN);
+        intptr_t e = client->read(client, buf, size);
         if(e < 0) return e;
         if(e == 0) return 0; 
         buf = ((char*)buf) + (size_t)e;
@@ -31,10 +54,10 @@ static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
     }
     return 1;
 }
-static intptr_t gtwrite_exact(uintptr_t fd, const void* buf, size_t size) {
+static intptr_t gtwrite_exact(Client* client, const void* buf, size_t size) {
     while(size) {
-        gtblockfd(fd, GTBLOCKOUT);
-        intptr_t e = send(fd, buf, size, 0);
+        gtblockfd(client->fd, GTBLOCKOUT);
+        intptr_t e = client->write(client, buf, size);
         if(e < 0) return e;
         if(e == 0) return 0; 
         buf = ((char*)buf) + (size_t)e;
@@ -157,13 +180,6 @@ enum {
     ERROR_NOT_AUTH
 };
 
-typedef struct{
-    struct list_head list;
-    int fd;
-    uint32_t userID;
-    uint32_t notifyID;
-} Client;
-
 typedef void (*protocol_func_t)(Client* client, Request* header);
 typedef struct {
     const char* name;
@@ -181,15 +197,15 @@ void echoEcho(Client* client, Request* header) {
     char buf[128];
     // TODO: send some error here:
     if(header->packet_len > sizeof(buf)) return;
-    gtread_exact(client->fd, buf, header->packet_len);
+    gtread_exact(client, buf, header->packet_len);
     Response resp = {
         .packet_id = header->packet_id,
         .opcode = 0,
         .packet_len = header->packet_len
     };
     response_hton(&resp);
-    gtwrite_exact(client->fd, &resp, sizeof(resp));
-    gtwrite_exact(client->fd, buf, header->packet_len);
+    gtwrite_exact(client, &resp, sizeof(resp));
+    gtwrite_exact(client, buf, header->packet_len);
 }
 protocol_func_t echoProtocolFuncs[] = {
     echoEcho,
@@ -254,7 +270,7 @@ void sendMsg(Client* client, Request* header) {
     // TODO: send some error here:
     if(header->packet_len <= sizeof(SendMsgPacket)) return;
     SendMsgPacket packet = { 0 };
-    int n = gtread_exact(client->fd, &packet, sizeof(packet));
+    int n = gtread_exact(client, &packet, sizeof(packet));
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read0;
     sendMsgPacket_ntoh(&packet);
@@ -264,7 +280,7 @@ void sendMsg(Client* client, Request* header) {
     char* msg = malloc(msg_len);
     // TODO: send some error here:
     if(!msg) return;
-    n = gtread_exact(client->fd, msg, msg_len);
+    n = gtread_exact(client, msg, msg_len);
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read;
     // TODO: utf8 and isgraphic verifications
@@ -313,7 +329,7 @@ void sendMsg(Client* client, Request* header) {
         .packet_len = 0
     };
     response_hton(&resp);
-    gtwrite_exact(client->fd, &resp, sizeof(resp));
+    gtwrite_exact(client, &resp, sizeof(resp));
     return;
 err_read:
     free(msg);
@@ -324,7 +340,7 @@ void getMsgsBefore(Client* client, Request* header) {
     // TODO: send some error here:
     if(header->packet_len != sizeof(MessagesBeforePacket)) return;
     MessagesBeforePacket packet;
-    int n = gtread_exact(client->fd, &packet, sizeof(packet));
+    int n = gtread_exact(client, &packet, sizeof(packet));
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read0;
     messagesBeforePacket_ntoh(&packet);
@@ -345,9 +361,9 @@ void getMsgsBefore(Client* client, Request* header) {
             };
             response_hton(&resp);
             messagesBeforeResponse_hton(&msg_resp);
-            gtwrite_exact(client->fd, &resp, sizeof(resp));
-            gtwrite_exact(client->fd, &msg_resp, sizeof(msg_resp));
-            gtwrite_exact(client->fd, msg->content, msg->content_len);
+            gtwrite_exact(client, &resp, sizeof(resp));
+            gtwrite_exact(client, &msg_resp, sizeof(msg_resp));
+            gtwrite_exact(client, msg->content, msg->content_len);
             packet.count--;
         }
     } 
@@ -357,7 +373,7 @@ void getMsgsBefore(Client* client, Request* header) {
         .packet_len = 0,
     };
     response_hton(&resp);
-    gtwrite_exact(client->fd, &resp, sizeof(resp));
+    gtwrite_exact(client, &resp, sizeof(resp));
 err_read0:
     return;
 } 
@@ -376,7 +392,7 @@ void notify(Client* client, Request* header) {
         .packet_len = 0,
     };
     response_hton(&resp);
-    gtwrite_exact(client->fd, &resp, sizeof(resp));
+    gtwrite_exact(client, &resp, sizeof(resp));
 }
 protocol_func_t notifyProtocolFuncs[] = {
     notify,
@@ -400,17 +416,17 @@ void coreGetProtocols(Client* client, Request* header) {
         res_header.opcode = 0;
         res_header.packet_len = sizeof(uint32_t) + strlen(protocols[i].name);
         response_hton(&res_header);
-        gtwrite_exact(client->fd, &res_header, sizeof(res_header));
+        gtwrite_exact(client, &res_header, sizeof(res_header));
         uint32_t id = htonl(i);
-        gtwrite_exact(client->fd, &id, sizeof(id));
-        gtwrite_exact(client->fd, protocols[i].name, strlen(protocols[i].name));
+        gtwrite_exact(client, &id, sizeof(id));
+        gtwrite_exact(client, protocols[i].name, strlen(protocols[i].name));
     }
     Response res_header;
     res_header.packet_id = header->packet_id;
     res_header.opcode = 0;
     res_header.packet_len = 0;
     response_hton(&res_header);
-    gtwrite_exact(client->fd, &res_header, sizeof(res_header));
+    gtwrite_exact(client, &res_header, sizeof(res_header));
 }
 
 void authAuthenticate(Client* client, Request* header){
@@ -418,7 +434,7 @@ void authAuthenticate(Client* client, Request* header){
 
     // TODO: send some error here:
     if(header->packet_len != sizeof(uint32_t)) return;
-    gtread_exact(client->fd, &client->userID, sizeof(uint32_t));
+    gtread_exact(client, &client->userID, sizeof(uint32_t));
     uint32_t userID = ntohl(client->userID);
     // TODO: send some error here:
     if(userID >= USERS_COUNT) return;
@@ -432,16 +448,16 @@ void authAuthenticate(Client* client, Request* header){
     res_header.opcode = 0;
     res_header.packet_len = 0;
     response_hton(&res_header);
-    gtwrite_exact(client->fd, &res_header, sizeof(res_header));
+    gtwrite_exact(client, &res_header, sizeof(res_header));
 }
 
 void client_thread(void* fd_void) {
-    Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0};
+    Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0, .read = unsecure_read, .write = unsecure_write};
     list_init(&client.list);
     Request req_header;
     Response res_header;
     for(;;) {
-        int n = gtread_exact(client.fd, &req_header, sizeof(req_header));
+        int n = gtread_exact(&client, &req_header, sizeof(req_header));
         if(n < 0) break;
         if(n == 0) break;
         request_ntoh(&req_header);
@@ -451,7 +467,7 @@ void client_thread(void* fd_void) {
             res_header.opcode = -ERROR_INVALID_PROTOCOL_ID;
             res_header.packet_len = 0;
             response_hton(&res_header);
-            gtwrite_exact(client.fd, &res_header, sizeof(res_header));
+            gtwrite_exact(&client, &res_header, sizeof(res_header));
             continue;
         }
         Protocol* proto = &protocols[req_header.protocol_id];
@@ -461,7 +477,7 @@ void client_thread(void* fd_void) {
             res_header.opcode = -ERROR_INVALID_FUNC_ID;
             res_header.packet_len = 0;
             response_hton(&res_header);
-            gtwrite_exact(client.fd, &res_header, sizeof(res_header));
+            gtwrite_exact(&client, &res_header, sizeof(res_header));
             continue;
         }
 
@@ -471,7 +487,7 @@ void client_thread(void* fd_void) {
             res_header.opcode = -ERROR_NOT_AUTH;
             res_header.packet_len = 0;
             response_hton(&res_header);
-            gtwrite_exact(client.fd, &res_header, sizeof(res_header));
+            gtwrite_exact(&client, &res_header, sizeof(res_header));
             continue;
         }
 
