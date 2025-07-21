@@ -252,11 +252,14 @@ void* gtswitch(void* sp) {
         if(gtlist_empty(&scheduler.queue)) timeout = -1;
         while(gtlist_empty(&scheduler.queue)) {
             struct epoll_event events[128];
-            int n = epoll_wait(
+            int n;
+            do {
+            n = epoll_wait(
     #ifdef _WIN32
                 (HANDLE)
     #endif            
                 scheduler.epoll, events, sizeof(events)/sizeof(*events), timeout);
+            } while (n < 0 && errno == EINTR);
             assert(n >= 0);
             for(size_t i = 0; i < (size_t)n; ++i) {
                 GPollBucket* bucket = events[i].data.ptr;
