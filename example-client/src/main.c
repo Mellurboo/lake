@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stui.h>
 #include <darray.h>
+#include <signal.h>
 
 #ifdef _WIN32
 #else
@@ -320,7 +321,22 @@ const char* shift_args(int *argc, const char ***argv) {
     if((*argc) <= 0) return NULL;
     return ((*argc)--, *((*argv)++));
 }
+#ifndef _MINOS
+void _interrupt_handler_resize(int sig) {
+    (void)sig;
+    stui_term_get_size(&term_width, &term_height);
+    stui_setsize(term_width, term_height);
+    stui_clear();
+    redraw();
+}
+#endif
+void register_signals(void) {
+#ifndef _MINOS
+    signal(SIGWINCH, _interrupt_handler_resize);
+#endif
+}
 int main(int argc, const char** argv) {
+    register_signals();
     gtinit();
     prev_term_flags = stui_term_get_flags();
     atexit(restore_prev_term);
