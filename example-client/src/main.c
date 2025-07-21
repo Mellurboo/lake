@@ -48,16 +48,6 @@ void sendMsgRequest_hton(SendMsgRequest* packet) {
     packet->channel_id = htonl(packet->channel_id);
 }
 
-static intptr_t read_exact(uintptr_t fd, void* buf, size_t size) {
-    while(size) {
-        intptr_t e = recv(fd, buf, size, 0);
-        if(e < 0) return e;
-        if(e == 0) return 0; 
-        buf = ((char*)buf) + (size_t)e;
-        size -= (size_t)e;
-    }
-    return 1;
-}
 static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
     while(size) {
         gtblockfd(fd, GTBLOCKIN);
@@ -69,8 +59,9 @@ static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
     }
     return 1;
 }
-static intptr_t write_exact(uintptr_t fd, const void* buf, size_t size) {
+static intptr_t gtwrite_exact(uintptr_t fd, const void* buf, size_t size) {
     while(size) {
+        gtblockfd(fd, GTBLOCKOUT);
         intptr_t e = send(fd, buf, size, 0);
         if(e < 0) return e;
         if(e == 0) return 0; 
@@ -399,7 +390,7 @@ int main(int argc, const char** argv) {
 
     uint32_t notify_protocol_id = 0;
     for(;;) {
-        e = read_exact(client, &resp, sizeof(resp));
+        e = gtread_exact(client, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.packet_id == get_extensions_id);
@@ -408,7 +399,7 @@ int main(int argc, const char** argv) {
 
         assert(resp.packet_len >= sizeof(uint32_t));
         Protocol* protocol = malloc(resp.packet_len + 1);
-        assert(read_exact(client, protocol, resp.packet_len) == 1);
+        assert(gtread_exact(client, protocol, resp.packet_len) == 1);
         protocol->id = ntohl(protocol->id);
         protocol->name[resp.packet_len-sizeof(uint32_t)] = '\0';
         if(((int)resp.opcode) < 0) {
@@ -443,9 +434,9 @@ int main(int argc, const char** argv) {
             .packet_len = sizeof(uint32_t)
         };
         request_hton(&req);
-        write_exact(client, &req, sizeof(req));
-        write_exact(client, &userID, sizeof(userID));
-        e = read_exact(client, &resp, sizeof(resp));
+        gtwrite_exact(client, &req, sizeof(req));
+        gtwrite_exact(client, &userID, sizeof(userID));
+        e = gtread_exact(client, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.opcode == 0);
@@ -478,13 +469,13 @@ int main(int argc, const char** argv) {
             .count = 100,
         };
         messagesBeforeRequest_hton(&msgs_request);
-        write_exact(client, &request, sizeof(request));
-        write_exact(client, &msgs_request, sizeof(msgs_request));
+        gtwrite_exact(client, &request, sizeof(request));
+        gtwrite_exact(client, &msgs_request, sizeof(msgs_request));
         Response resp;
         fprintf(stderr, "We in here:\n");
         // TODO: ^^verify things
         for(;;) {
-            read_exact(client, &resp, sizeof(resp));
+            gtread_exact(client, &resp, sizeof(resp));
             response_ntoh(&resp);
             // TODO: ^^verify things
             // TODO: I don't know how to handle such case:
@@ -493,10 +484,10 @@ int main(int argc, const char** argv) {
             size_t content_len = resp.packet_len - sizeof(MessagesBeforeResponse);
             char* content = malloc(content_len);
             MessagesBeforeResponse msgs_resp;
-            read_exact(client, &msgs_resp, sizeof(MessagesBeforeResponse));
+            gtread_exact(client, &msgs_resp, sizeof(MessagesBeforeResponse));
             messagesBeforeResponse_ntoh(&msgs_resp);
             uint64_t milis = (((uint64_t)msgs_resp.milis_high) << 32) | (uint64_t)msgs_resp.milis_low;
-            read_exact(client, content, content_len);
+            gtread_exact(client, content, content_len);
 
             // TODO: verify all this sheize^
             Message msg = {
@@ -526,7 +517,7 @@ int main(int argc, const char** argv) {
             .packet_len = 0,
         };
         request_hton(&req);
-        write_exact(client, &req, sizeof(Request));
+        gtwrite_exact(client, &req, sizeof(Request));
     }
     for(;;) {
         redraw();
@@ -561,9 +552,9 @@ int main(int argc, const char** argv) {
             };
             request_hton(&req);
             sendMsgRequest_hton(&send_msg);
-            write_exact(client, &req, sizeof(req));
-            write_exact(client, &send_msg, sizeof(send_msg));
-            write_exact(client, prompt.items, prompt.len);
+            gtwrite_exact(client, &req, sizeof(req));
+            gtwrite_exact(client, &send_msg, sizeof(send_msg));
+            gtwrite_exact(client, prompt.items, prompt.len);
             prompt.len = 0;
         } break;
         default:
