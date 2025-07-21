@@ -275,6 +275,11 @@ int main(void) {
         (void)_;
         dming = atoi(buf);
     }
+    // TODO: unhardcode this and local user hashmap.
+    static const char* author_names[] = {
+        "f1l1p",
+        "dcraftbg"
+    };
     Messages msgs = {0};
     {
         Request request = {
@@ -313,11 +318,6 @@ int main(void) {
             uint64_t milis = (((uint64_t)msgs_resp.milis_high) << 32) | (uint64_t)msgs_resp.milis_low;
             read_exact(client, content, content_len);
 
-            // TODO: unhardcode this and local user hashmap.
-            static const char* author_names[] = {
-                "f1l1p",
-                "dcraftbg"
-            };
             // TODO: verify all this sheize^
             Message msg = {
                 .author_name = msgs_resp.author_id < ARRAY_LEN(author_names) ? (char*)author_names[msgs_resp.author_id] : "UNKNOWN",
@@ -335,9 +335,15 @@ int main(void) {
     stui_setsize(term_width, term_height);
     for(;;) {
         stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
+        char buf[128];
+        snprintf(buf, sizeof(buf), "DMs: %s", dming < ARRAY_LEN(author_names) ? author_names[dming] : "UNKNOWN");
+        {
+            char* str = buf;
+            size_t x = 2;
+            while(*str) stui_putchar(x++, 0, *str++);
+        }
         render_messages(content_box(term_width, term_height), &msgs);
         stui_refresh();
-        char buf[128];
         SendMsgRequest* msg = (SendMsgRequest*)buf;
         msg->server_id = 0;
         msg->channel_id = dming;
