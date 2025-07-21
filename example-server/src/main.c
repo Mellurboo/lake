@@ -127,13 +127,15 @@ enum {
     USERS_COUNT
 };
 static User users[USERS_COUNT] = { 0 };
-static DM* get_or_insert_dm(User* user, uint32_t max_user_id) {
+static DM* get_or_insert_dm(User* user, uint32_t min_user_id, uint32_t max_user_id) {
     for(size_t i = 0; i < user->dms.len; ++i) {
         DM* dm = &user->dms.items[i];
         if(dm->max_user_id == max_user_id) return dm;
     }
     da_push(&user->dms, ((DM){0}));
     DM* dm = &user->dms.items[user->dms.len-1];
+    da_push(&dm->channel.participants, min_user_id);
+    da_push(&dm->channel.participants, max_user_id);
     dm->max_user_id = max_user_id;
     return dm;
 }
@@ -144,7 +146,7 @@ static Channel* get_or_insert_channel(uint32_t server_id, uint32_t channel_id, u
         assert(channel_id < USERS_COUNT);
         size_t max_user_id = author_id < channel_id ? channel_id : author_id;
         size_t min_user_id = author_id < channel_id ? author_id : channel_id;
-        return &get_or_insert_dm(&users[min_user_id], max_user_id)->channel;
+        return &get_or_insert_dm(&users[min_user_id], min_user_id, max_user_id)->channel;
     }
     // TODO: we assert its DMs
     assert(false && "To be done: everything other than DMs");
@@ -234,11 +236,17 @@ void messagesBeforeResponse_hton(MessagesBeforeResponse* packet) {
 typedef struct {
     uint32_t server_id;
     uint32_t channel_id;
+    uint32_t author_id;
+    uint32_t milis_low;
+    uint32_t milis_high;
 } Notification;
 
 void notification_hton(Notification* packet) {
-    packet->server_id = ntohl(packet->server_id);
-    packet->channel_id = ntohl(packet->channel_id);
+    packet->server_id = htonl(packet->server_id);
+    packet->channel_id = htonl(packet->channel_id);
+    packet->author_id = htonl(packet->author_id);
+    packet->milis_low = htonl(packet->milis_low);
+    packet->milis_high = htonl(packet->milis_high);
 }
 #define MAX_MESSAGE 10000
 void sendMsg(Client* client, Request* header) {
@@ -270,11 +278,15 @@ void sendMsg(Client* client, Request* header) {
     da_push(&channel->msgs, message);
     for(size_t i = 0; i < channel->participants.len; ++i) {
         uint32_t id = channel->participants.items[i];
+        fprintf(stderr, "Going through participants\n");
         if(id == client->userID) continue;
         User* user = &users[id];
         list_foreach(user_conn_list, &user->clients) {
+            fprintf(stderr, "Going through connections!\n");
             Client* user_conn = (Client*)user_conn_list;
-            if(!user_conn->notifyID) continue;
+            fprintf(stderr, "user_conn->notifyID: %02X\n", user_conn->notifyID);
+            if(user_conn->notifyID == ~0u) continue;
+            fprintf(stderr, "Notifying this ninja (like linus)\n");
             Response resp = {
                 .packet_id = user_conn->notifyID,
                 .opcode = 0,
@@ -284,6 +296,9 @@ void sendMsg(Client* client, Request* header) {
             Notification notif = {
                 .server_id = packet.server_id,
                 .channel_id = packet.channel_id,
+                .author_id = message.author,
+                .milis_low = message.milis,
+                .milis_high = message.milis >> 32,
             };
             notification_hton(&notif);
             // TODO: don't block here? And/or spawn a gt thread for each user we're notifying
@@ -314,12 +329,9 @@ void getMsgsBefore(Client* client, Request* header) {
     if(n < 0 || n == 0) goto err_read0;
     messagesBeforePacket_ntoh(&packet);
     uint64_t milis = (((uint64_t)packet.milis_high) << 32) | (uint64_t)packet.milis_low;
-
-    size_t max_user_id = client->userID < packet.channel_id ? packet.channel_id : client->userID;
-    size_t min_user_id = client->userID < packet.channel_id ? client->userID : packet.channel_id;
-    DM* dm = get_or_insert_dm(&users[min_user_id], max_user_id);
-    for(size_t i = dm->channel.msgs.len; i > 0 && packet.count > 0; --i) {
-        Message* msg = &dm->channel.msgs.items[i - 1];
+    Channel* channel = get_or_insert_channel(packet.server_id, packet.channel_id, client->userID);
+    for(size_t i = channel->msgs.len; i > 0 && packet.count > 0; --i) {
+        Message* msg = &channel->msgs.items[i - 1];
         if(msg->milis < milis) {
             Response resp = {
                 .packet_id = header->packet_id,
@@ -357,8 +369,6 @@ protocol_func_t msgProtocolFuncs[] = {
 void notify(Client* client, Request* header) {
     // TODO: send some error here:
     if(header->packet_len != 0) return;
-    // TODO: send some error here:
-    if(header->packet_id == 0) return;
     client->notifyID = header->packet_id;
     Response resp = {
         .packet_id = header->packet_id,
@@ -426,7 +436,7 @@ void authAuthenticate(Client* client, Request* header){
 }
 
 void client_thread(void* fd_void) {
-    Client client = {.fd = (uintptr_t)fd_void, .userID = (uint32_t)-1};
+    Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0};
     list_init(&client.list);
     Request req_header;
     Response res_header;
@@ -468,6 +478,7 @@ void client_thread(void* fd_void) {
         fprintf(stderr, "INFO: %d: %s func_id=%d\n", client.fd, proto->name, req_header.func_id);
         proto->funcs[req_header.func_id](&client, &req_header);
     }
+    list_remove(&client.list);
     closesocket(client.fd);
     fprintf(stderr, "Disconnected!\n");
 }

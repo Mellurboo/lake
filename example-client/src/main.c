@@ -57,6 +57,17 @@ static intptr_t read_exact(uintptr_t fd, void* buf, size_t size) {
     }
     return 1;
 }
+static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
+    while(size) {
+        gtblockfd(fd, GTBLOCKIN);
+        intptr_t e = recv(fd, buf, size, 0);
+        if(e < 0) return e;
+        if(e == 0) return 0; 
+        buf = ((char*)buf) + (size_t)e;
+        size -= (size_t)e;
+    }
+    return 1;
+}
 static intptr_t write_exact(uintptr_t fd, const void* buf, size_t size) {
     while(size) {
         intptr_t e = send(fd, buf, size, 0);
@@ -176,6 +187,135 @@ typedef struct {
     char* items;
     size_t len, cap;
 } StringBuilder;
+typedef struct IncomingEvent IncomingEvent;
+typedef void (*event_handler_t)(int fd, Response* response, IncomingEvent* event);
+struct IncomingEvent {
+    event_handler_t onEvent;
+    union {
+        struct { Messages* msgs; Message msg; } onMessage;
+        struct { Messages* msgs; } onNotification;
+    } as;
+};
+#define MAX_INCOMING_EVENTS 128
+static IncomingEvent incoming_events[MAX_INCOMING_EVENTS];
+size_t allocate_incoming_event(void) {
+    for(;;) {
+        for(size_t i = 0; i < MAX_INCOMING_EVENTS; ++i) {
+            if(!incoming_events[i].onEvent) return i;
+        }
+        // TODO: we should introduce gtsemaphore
+        // that way we can notify on event completion
+        // and wait for it in the green threads
+        gtyield();
+    }
+    // unreachable
+    // return ~0;
+}
+void reader_thread(void* fd_void) {
+    int fd = (uintptr_t)fd_void;
+    int e;
+    for(;;) {
+        Response resp; 
+        e = gtread_exact(fd, &resp, sizeof(resp));
+        if(e != 1) break;
+        response_ntoh(&resp);
+        // TODO: skip resp.len amount maybe?
+        if(resp.packet_id >= MAX_INCOMING_EVENTS) {
+            fprintf(stderr, "We got some bogus event with packet_id: %u\n", resp.packet_id);
+            continue;
+        }
+        if(!incoming_events[resp.packet_id].onEvent) {
+            fprintf(stderr, "We got some unhandled (bogus?) event with packet_id: %u\n", resp.packet_id);
+            continue;
+        }
+        incoming_events[resp.packet_id].onEvent(fd, &resp, &incoming_events[resp.packet_id]);
+    }
+    fprintf(stderr, "Some sort of IO error occured. I don't know how to handle this right now. Probably just disconnect\n");
+    fprintf(stderr, "ERROR: %s", sneterr());
+}
+
+void redraw(void);
+void okOnMessage(int fd, Response* response, IncomingEvent* event) {
+    (void)fd;
+    (void)response;
+    da_push(event->as.onMessage.msgs, event->as.onMessage.msg);
+    event->onEvent = NULL;
+    redraw();
+}
+typedef struct {
+    uint32_t server_id;
+    uint32_t channel_id;
+    uint32_t author_id;
+    uint32_t milis_low;
+    uint32_t milis_high;
+} Notification;
+void notification_ntoh(Notification* packet) {
+    packet->server_id = ntohl(packet->server_id);
+    packet->channel_id = ntohl(packet->channel_id);
+    packet->author_id = ntohl(packet->author_id);
+    packet->milis_low = ntohl(packet->milis_low);
+    packet->milis_high = ntohl(packet->milis_high);
+}
+// TODO: unhardcode this and local user hashmap.
+static const char* author_names[] = {
+    "f1l1p",
+    "dcraftbg"
+};
+void onNotification(int fd, Response* response, IncomingEvent* event) {
+    // SKIP
+    if(response->packet_len == 0) return;
+    assert(response->opcode == 0);
+    assert(response->packet_len > sizeof(Notification));
+    Notification notif;
+    // TODO: error check
+    gtread_exact(fd, &notif, sizeof(notif));
+    notification_ntoh(&notif);
+    size_t content_len = response->packet_len - sizeof(Notification);
+    char* content = malloc(content_len);
+    // TODO: error check
+    gtread_exact(fd, content, content_len);
+    uint64_t milis = (((uint64_t)notif.milis_high) << 32) | (uint64_t)notif.milis_low;
+    Message msg = {
+        .content_len = content_len,
+        .content = content,
+        .milis = milis,
+        .author_name = (char*)(notif.author_id < ARRAY_LEN(author_names) ? author_names[notif.author_id] : "UNKNOWN")
+    };
+    da_push(event->as.onNotification.msgs, msg);
+    redraw();
+}
+uint32_t dming;
+Messages msgs;
+size_t term_width, term_height;
+StringBuilder prompt = { 0 };
+void redraw(void) {
+    for(size_t y = 0; y < term_height; ++y) {
+        for(size_t x = 0; x < term_width; ++x) {
+            stui_putchar(x, y, ' ');
+        }
+    }
+    stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
+    char buf[128];
+    snprintf(buf, sizeof(buf), "DMs: %s", dming < ARRAY_LEN(author_names) ? author_names[dming] : "UNKNOWN");
+    {
+        char* str = buf;
+        size_t x = 2;
+        while(*str) stui_putchar(x++, 0, *str++);
+    }
+    render_messages(content_box(term_width, term_height), &msgs);
+    stui_putchar(0, term_height - 1, '>');
+    stui_putchar(1, term_height - 1, ' ');
+    size_t x = 2;
+    for(size_t i = 2; i < term_width - 1; ++i) {
+        stui_putchar(i, term_height - 1, ' ');
+    }
+    for(; x < prompt.len + 2; ++x) {
+        if(x > term_width - 1) continue;
+        stui_putchar(0 + x, term_height - 1, prompt.items[x - 2]);
+    }
+    stui_refresh();
+    stui_goto(x, term_height - 1);
+}
 int main(void) {
     gtinit();
     prev_term_flags = stui_term_get_flags();
@@ -223,6 +363,8 @@ int main(void) {
     uint32_t auth_protocol_id = 0;
     // uint32_t echo_protocol_id = 0;
     uint32_t msg_protocol_id = 0;
+
+    uint32_t notify_protocol_id = 0;
     for(;;) {
         e = read_exact(client, &resp, sizeof(resp));
         assert(e == 1);
@@ -244,6 +386,7 @@ int main(void) {
         // if(strcmp(protocol->name, "echo") == 0) echo_protocol_id = protocol->id;
         if(strcmp(protocol->name, "auth") == 0) auth_protocol_id = protocol->id;
         if(strcmp(protocol->name, "msg")  == 0) msg_protocol_id = protocol->id; 
+        if(strcmp(protocol->name, "notify") == 0) notify_protocol_id = protocol->id;
         free(protocol);
     }
     if(!msg_protocol_id) {
@@ -251,14 +394,14 @@ int main(void) {
         return 1;
     } 
     fprintf(stderr, "Sent request successfully!\n");
-
+    uint32_t userID = 0;
     if(auth_protocol_id) {
         char buf[128];
         printf("Server requires auth please provide userID:\n> ");
         fflush(stdout);
         char* _ = fgets(buf, sizeof(buf), stdin);
         (void)_;
-        uint32_t userID = atoi(buf);
+        userID = atoi(buf);
         userID = htonl(userID);
         Request req = {
             .protocol_id = auth_protocol_id,
@@ -274,8 +417,9 @@ int main(void) {
         response_ntoh(&resp);
         assert(resp.opcode == 0);
         assert(resp.packet_len == 0);
+        userID = ntohl(userID);
     }
-    uint32_t dming = ~0;
+    dming = ~0;
     {
         char buf[128];
         printf("Who you wanna DM?\n> ");
@@ -284,12 +428,6 @@ int main(void) {
         (void)_;
         dming = atoi(buf);
     }
-    // TODO: unhardcode this and local user hashmap.
-    static const char* author_names[] = {
-        "f1l1p",
-        "dcraftbg"
-    };
-    Messages msgs = {0};
     {
         Request request = {
             .protocol_id = msg_protocol_id,
@@ -339,33 +477,26 @@ int main(void) {
     }
 
     stui_clear();
-    size_t term_width, term_height;
     stui_term_get_size(&term_width, &term_height);
     stui_setsize(term_width, term_height);
     stui_term_set_flags(STUI_TERM_FLAG_INSTANT);
-    StringBuilder prompt = { 0 };
+    gtgo(reader_thread, (void*)(uintptr_t)client);
+    size_t notif_event = allocate_incoming_event();
+    incoming_events[notif_event].as.onNotification.msgs = &msgs;
+    incoming_events[notif_event].onEvent = onNotification;
+
+    if(notify_protocol_id) {
+        Request req = {
+            .protocol_id = notify_protocol_id,
+            .func_id = 0,
+            .packet_id = notif_event,
+            .packet_len = 0,
+        };
+        request_hton(&req);
+        write_exact(client, &req, sizeof(Request));
+    }
     for(;;) {
-        stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
-        char buf[128];
-        snprintf(buf, sizeof(buf), "DMs: %s", dming < ARRAY_LEN(author_names) ? author_names[dming] : "UNKNOWN");
-        {
-            char* str = buf;
-            size_t x = 2;
-            while(*str) stui_putchar(x++, 0, *str++);
-        }
-        render_messages(content_box(term_width, term_height), &msgs);
-        stui_putchar(0, term_height - 1, '>');
-        stui_putchar(1, term_height - 1, ' ');
-        size_t x = 2;
-        for(size_t i = 2; i < term_width - 1; ++i) {
-            stui_putchar(i, term_height - 1, ' ');
-        }
-        for(; x < prompt.len + 2; ++x) {
-            if(x > term_width - 1) continue;
-            stui_putchar(0 + x, term_height - 1, prompt.items[x - 2]);
-        }
-        stui_refresh();
-        stui_goto(x, term_height - 1);
+        redraw();
         gtblockfd(fileno(stdin), GTBLOCKIN);
         int c = getchar();
         switch(c) {
@@ -378,9 +509,19 @@ int main(void) {
             Request req = {
                 .protocol_id = msg_protocol_id,
                 .func_id = 0,
-                .packet_id = 69,
+                .packet_id = allocate_incoming_event(),
                 .packet_len = sizeof(SendMsgRequest) + prompt.len
             };
+            incoming_events[req.packet_id].as.onMessage.msgs = &msgs;
+            char* msg = malloc(prompt.len);
+            memcpy(msg, prompt.items, prompt.len);
+            incoming_events[req.packet_id].as.onMessage.msg = (Message) {
+                .milis = time_unix_milis(),
+                .author_name = (char*)(userID < ARRAY_LEN(author_names) ? author_names[userID] : "(You. Dumbass)"),
+                .content_len = prompt.len,
+                .content = msg,
+            };
+            incoming_events[req.packet_id].onEvent = okOnMessage;
             SendMsgRequest send_msg = {
                 .server_id = 0,
                 .channel_id = dming,
