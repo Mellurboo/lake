@@ -41,7 +41,6 @@ void request_hton(Request* req) {
 typedef struct {
     uint32_t server_id;
     uint32_t channel_id;
-    char msg[];
 } SendMsgRequest;
 void sendMsgRequest_hton(SendMsgRequest* packet) {
     packet->server_id = htonl(packet->server_id);
@@ -169,8 +168,18 @@ void render_messages(UIBox box, Messages* msgs) {
 inline Message cstr_msg(const char* author, const char* content) {
     return (Message){.milis = time_unix_milis(), .author_name = (char*)author, .content_len = strlen(content), .content = (char*)content };
 }
-
+static stui_term_flag_t prev_term_flags = 0;
+void restore_prev_term(void) {
+    stui_term_set_flags(prev_term_flags);
+}
+typedef struct {
+    char* items;
+    size_t len, cap;
+} StringBuilder;
 int main(void) {
+    gtinit();
+    prev_term_flags = stui_term_get_flags();
+    atexit(restore_prev_term);
     int client = socket(AF_INET, SOCK_STREAM, 0); 
     if(client < 0) {
         fprintf(stderr, "FATAL: Could not create server socket: %s\n", sneterr());
@@ -333,6 +342,8 @@ int main(void) {
     size_t term_width, term_height;
     stui_term_get_size(&term_width, &term_height);
     stui_setsize(term_width, term_height);
+    stui_term_set_flags(STUI_TERM_FLAG_INSTANT);
+    StringBuilder prompt = { 0 };
     for(;;) {
         stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
         char buf[128];
@@ -343,45 +354,50 @@ int main(void) {
             while(*str) stui_putchar(x++, 0, *str++);
         }
         render_messages(content_box(term_width, term_height), &msgs);
+        stui_putchar(0, term_height - 1, '>');
+        stui_putchar(1, term_height - 1, ' ');
+        size_t x = 2;
+        for(size_t i = 2; i < term_width - 1; ++i) {
+            stui_putchar(i, term_height - 1, ' ');
+        }
+        for(; x < prompt.len + 2; ++x) {
+            if(x > term_width - 1) continue;
+            stui_putchar(0 + x, term_height - 1, prompt.items[x - 2]);
+        }
         stui_refresh();
-        SendMsgRequest* msg = (SendMsgRequest*)buf;
-        msg->server_id = 0;
-        msg->channel_id = dming;
-        printf("> \x1b[37m");
-        fflush(stdout);
-        char* _ = fgets(msg->msg, sizeof(buf) - sizeof(SendMsgRequest), stdin);
-        (void)_;
-        if(strcmp(msg->msg, ":quit\n") == 0) break;
-        printf("\x1b[0m");
-        fflush(stdout);
-        Request req = {
-            .protocol_id = msg_protocol_id,
-            .func_id = 0,
-            .packet_id = 69,
-            .packet_len = sizeof(SendMsgRequest) + strlen(msg->msg)
-        };
-        request_hton(&req);
-        sendMsgRequest_hton(msg);
-        write_exact(client, &req, sizeof(req));
-        write_exact(client, msg, sizeof(*msg) + strlen(msg->msg));
-
-        e = read_exact(client, &resp, sizeof(resp));
-        assert(e == 1);
-        response_ntoh(&resp);
-        if(resp.packet_id != 69) {
-            fprintf(stderr, "We got packet_id = %u -> %u\n", resp.packet_id, ntohl(resp.packet_id));
-            return 1;
+        stui_goto(x, term_height - 1);
+        gtblockfd(fileno(stdin), GTBLOCKIN);
+        int c = getchar();
+        switch(c) {
+        case '\b':
+        case 127:
+            if(prompt.len) prompt.len--;
+            break;
+        case '\n': {
+            if(prompt.len == 5 && memcmp(prompt.items, ":quit", prompt.len) == 0) goto end;
+            Request req = {
+                .protocol_id = msg_protocol_id,
+                .func_id = 0,
+                .packet_id = 69,
+                .packet_len = sizeof(SendMsgRequest) + prompt.len
+            };
+            SendMsgRequest send_msg = {
+                .server_id = 0,
+                .channel_id = dming,
+            };
+            request_hton(&req);
+            sendMsgRequest_hton(&send_msg);
+            write_exact(client, &req, sizeof(req));
+            write_exact(client, &send_msg, sizeof(send_msg));
+            write_exact(client, prompt.items, prompt.len);
+            prompt.len = 0;
+        } break;
+        default:
+            da_push(&prompt, c);
+            break;
         }
-
-        if((int)resp.opcode == -3) {
-            fprintf(stderr, "Not Authenticated\n");
-            return 1;
-        }
-        assert(resp.packet_len == 0);
-        assert(resp.opcode == 0);
-        printf("\x1b[A> %s", msg->msg);
-        fflush(stdout);
     }
+end:
     closesocket(client);
     return 0;
 }
