@@ -460,8 +460,6 @@ void authAuthenticate(Client* client, Request* header){
     crypto_kem_enc(ct, ss, users[userID].pk);
 
     AES_init_ctx(&client->aes_ctx, ss);
-    for(size_t i = 0; i <KYBER_SSBYTES; i++) ss[i] ^= 0xFE;
-    AES_ctx_set_iv(&client->aes_ctx, ss);
     free(ss);
 
     uint8_t* randBytes = calloc(RAND_COUNT, 1);

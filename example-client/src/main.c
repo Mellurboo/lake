@@ -483,8 +483,6 @@ int main(int argc, const char** argv) {
         uint8_t* ss = calloc(KYBER_SSBYTES, 1);
         crypto_kem_dec(ss, cipherData, sk);
         AES_init_ctx(&aes_ctx, ss);
-        for(size_t i = 0; i <KYBER_SSBYTES; i++) ss[i] ^= 0xFE;
-        AES_ctx_set_iv(&aes_ctx, ss);
         free(ss);
 
         AES_CBC_decrypt_buffer(&aes_ctx, cipherData + KYBER_CIPHERTEXTBYTES, 16);
