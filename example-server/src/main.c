@@ -69,11 +69,30 @@ static intptr_t unsecure_gtwrite_exact(Client* client, const void* buf, size_t s
     }
     return 1;
 }
+static intptr_t client_wflush(Client* client) {
+    if(client->write_buffer_head == 0) return 1;
+    intptr_t e = client->write(client, client->write_buffer, client->write_buffer_head);
+    client->write_buffer_head = 0;
+    return e;
+}
 static intptr_t client_read(Client* client, void* buf, size_t size) {
     return client->read(client, buf, size);
 }
 static intptr_t client_write(Client* client, const void* buf, size_t size) {
-    return client->write(client, buf, size);
+    intptr_t e;
+    while(size) {
+        size_t buffer_remain = WRITE_BUFFER_CAPACITY - client->write_buffer_head;
+        size_t n = size < buffer_remain ? size : buffer_remain;
+        memcpy(client->write_buffer + client->write_buffer_head, buf, n);
+        client->write_buffer_head += n;
+        size -= n;
+        buf = ((char*)buf) + n;
+        if(client->write_buffer_head == WRITE_BUFFER_CAPACITY) {
+            e = client_wflush(client);
+            if(e <= 0) return e;
+        }
+    }
+    return 1;
 }
 
 #ifdef _WIN32
@@ -218,6 +237,7 @@ void echoEcho(Client* client, Request* header) {
     response_hton(&resp);
     client_write(client, &resp, sizeof(resp));
     client_write(client, buf, header->packet_len);
+    client_wflush(client);
 }
 protocol_func_t echoProtocolFuncs[] = {
     echoEcho,
@@ -342,6 +362,7 @@ void sendMsg(Client* client, Request* header) {
     };
     response_hton(&resp);
     client_write(client, &resp, sizeof(resp));
+    client_wflush(client);
     return;
 err_read:
     free(msg);
@@ -376,6 +397,7 @@ void getMsgsBefore(Client* client, Request* header) {
             client_write(client, &resp, sizeof(resp));
             client_write(client, &msg_resp, sizeof(msg_resp));
             client_write(client, msg->content, msg->content_len);
+            client_wflush(client);
             packet.count--;
         }
     } 
@@ -386,6 +408,7 @@ void getMsgsBefore(Client* client, Request* header) {
     };
     response_hton(&resp);
     client_write(client, &resp, sizeof(resp));
+    client_wflush(client);
 err_read0:
     return;
 } 
@@ -405,6 +428,7 @@ void notify(Client* client, Request* header) {
     };
     response_hton(&resp);
     client_write(client, &resp, sizeof(resp));
+    client_wflush(client);
 }
 protocol_func_t notifyProtocolFuncs[] = {
     notify,
@@ -439,6 +463,7 @@ void coreGetProtocols(Client* client, Request* header) {
     res_header.packet_len = 0;
     response_hton(&res_header);
     client_write(client, &res_header, sizeof(res_header));
+    client_wflush(client);
 }
 
 void authAuthenticate(Client* client, Request* header){
@@ -489,6 +514,7 @@ void authAuthenticate(Client* client, Request* header){
     response_hton(&test);
     client_write(client, &test, sizeof(test));
     client_write(client, ct, KYBER_CIPHERTEXTBYTES + RAND_COUNT);
+    client_wflush(client);
     free(ct);
 
     Request req;
@@ -523,13 +549,14 @@ void authAuthenticate(Client* client, Request* header){
     client_write(client, &res_header, sizeof(res_header));
     userID = htonl(userID);
     client_write(client, &userID, sizeof(userID));
+    client_wflush(client);
 }
 
 void client_thread(void* fd_void) {
     Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0, .read = unsecure_gtread_exact, .write = unsecure_gtwrite_exact};
     list_init(&client.list);
     client.read_buffer = malloc(READ_BUFFER_CAPACITY);
-    client.write_buffer = malloc(READ_BUFFER_CAPACITY);
+    client.write_buffer = malloc(WRITE_BUFFER_CAPACITY);
     // TODO: send some error here:
     if(!client.read_buffer || !client.write_buffer) {
         free(client.read_buffer);
