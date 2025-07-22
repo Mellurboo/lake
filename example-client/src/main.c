@@ -229,6 +229,7 @@ void reader_thread(void* fd_void) {
     }
     fprintf(stderr, "Some sort of IO error occured. I don't know how to handle this right now. Probably just disconnect\n");
     fprintf(stderr, "ERROR: %s", sneterr());
+    exit(1);
 }
 
 void redraw(void);
@@ -369,7 +370,6 @@ int main(int argc, const char** argv) {
             snprintf(secret_key_name, sizeof(secret_key_name), "%s.priv", arg);
         }
     }
-
     if(public_key_name[0] != 0){
         size_t read_size = 0;
         pk = (uint8_t*)read_entire_file(public_key_name, &read_size);
@@ -455,7 +455,7 @@ int main(int argc, const char** argv) {
         printf("Server requires auth\n");
         fflush(stdout);
 
-        if(public_key_name[0] == '0'){
+        if(public_key_name[0] == '\0'){
             fprintf(stderr, "Provide keys!\n");
             return 1;
         }
