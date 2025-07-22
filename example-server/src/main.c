@@ -27,7 +27,11 @@ typedef struct Client Client;
 typedef intptr_t (*client_read_func_t)(Client* client, void* buf, size_t size);
 typedef intptr_t (*client_write_func_t)(Client* client, const void* buf, size_t size);
 
-struct Client{
+
+#define AES_PAD(n) (((n + (AES_BLOCKLEN - 1)) / AES_BLOCKLEN) * AES_BLOCKLEN)
+#define WRITE_BUFFER_CAPACITY AES_PAD(4096)
+#define READ_BUFFER_CAPACITY AES_PAD(4096)
+struct Client {
     struct list_head list;
     int fd;
     uint32_t userID;
@@ -36,6 +40,10 @@ struct Client{
     client_read_func_t read;
     client_write_func_t write;
 
+    uint8_t* write_buffer;
+    uint8_t* read_buffer;
+    uint32_t write_buffer_head;
+    uint32_t read_buffer_head;
     struct AES_ctx aes_ctx;
 };
 
@@ -60,6 +68,12 @@ static intptr_t unsecure_gtwrite_exact(Client* client, const void* buf, size_t s
         size -= (size_t)e;
     }
     return 1;
+}
+static intptr_t client_read(Client* client, void* buf, size_t size) {
+    return client->read(client, buf, size);
+}
+static intptr_t client_write(Client* client, const void* buf, size_t size) {
+    return client->write(client, buf, size);
 }
 
 #ifdef _WIN32
@@ -195,15 +209,15 @@ void echoEcho(Client* client, Request* header) {
     char buf[128];
     // TODO: send some error here:
     if(header->packet_len > sizeof(buf)) return;
-    client->read(client, buf, header->packet_len);
+    client_read(client, buf, header->packet_len);
     Response resp = {
         .packet_id = header->packet_id,
         .opcode = 0,
         .packet_len = header->packet_len
     };
     response_hton(&resp);
-    client->write(client, &resp, sizeof(resp));
-    client->write(client, buf, header->packet_len);
+    client_write(client, &resp, sizeof(resp));
+    client_write(client, buf, header->packet_len);
 }
 protocol_func_t echoProtocolFuncs[] = {
     echoEcho,
@@ -268,7 +282,7 @@ void sendMsg(Client* client, Request* header) {
     // TODO: send some error here:
     if(header->packet_len <= sizeof(SendMsgPacket)) return;
     SendMsgPacket packet = { 0 };
-    int n = client->read(client, &packet, sizeof(packet));
+    int n = client_read(client, &packet, sizeof(packet));
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read0;
     sendMsgPacket_ntoh(&packet);
@@ -278,7 +292,7 @@ void sendMsg(Client* client, Request* header) {
     char* msg = malloc(msg_len);
     // TODO: send some error here:
     if(!msg) return;
-    n = client->read(client, msg, msg_len);
+    n = client_read(client, msg, msg_len);
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read;
     // TODO: utf8 and isgraphic verifications
@@ -327,7 +341,7 @@ void sendMsg(Client* client, Request* header) {
         .packet_len = 0
     };
     response_hton(&resp);
-    client->write(client, &resp, sizeof(resp));
+    client_write(client, &resp, sizeof(resp));
     return;
 err_read:
     free(msg);
@@ -338,7 +352,7 @@ void getMsgsBefore(Client* client, Request* header) {
     // TODO: send some error here:
     if(header->packet_len != sizeof(MessagesBeforePacket)) return;
     MessagesBeforePacket packet;
-    int n = client->read(client, &packet, sizeof(packet));
+    int n = client_read(client, &packet, sizeof(packet));
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read0;
     messagesBeforePacket_ntoh(&packet);
@@ -359,9 +373,9 @@ void getMsgsBefore(Client* client, Request* header) {
             };
             response_hton(&resp);
             messagesBeforeResponse_hton(&msg_resp);
-            client->write(client, &resp, sizeof(resp));
-            client->write(client, &msg_resp, sizeof(msg_resp));
-            client->write(client, msg->content, msg->content_len);
+            client_write(client, &resp, sizeof(resp));
+            client_write(client, &msg_resp, sizeof(msg_resp));
+            client_write(client, msg->content, msg->content_len);
             packet.count--;
         }
     } 
@@ -371,7 +385,7 @@ void getMsgsBefore(Client* client, Request* header) {
         .packet_len = 0,
     };
     response_hton(&resp);
-    client->write(client, &resp, sizeof(resp));
+    client_write(client, &resp, sizeof(resp));
 err_read0:
     return;
 } 
@@ -390,7 +404,7 @@ void notify(Client* client, Request* header) {
         .packet_len = 0,
     };
     response_hton(&resp);
-    client->write(client, &resp, sizeof(resp));
+    client_write(client, &resp, sizeof(resp));
 }
 protocol_func_t notifyProtocolFuncs[] = {
     notify,
@@ -414,17 +428,17 @@ void coreGetProtocols(Client* client, Request* header) {
         res_header.opcode = 0;
         res_header.packet_len = sizeof(uint32_t) + strlen(protocols[i].name);
         response_hton(&res_header);
-        client->write(client, &res_header, sizeof(res_header));
+        client_write(client, &res_header, sizeof(res_header));
         uint32_t id = htonl(i);
-        client->write(client, &id, sizeof(id));
-        client->write(client, protocols[i].name, strlen(protocols[i].name));
+        client_write(client, &id, sizeof(id));
+        client_write(client, protocols[i].name, strlen(protocols[i].name));
     }
     Response res_header;
     res_header.packet_id = header->packet_id;
     res_header.opcode = 0;
     res_header.packet_len = 0;
     response_hton(&res_header);
-    client->write(client, &res_header, sizeof(res_header));
+    client_write(client, &res_header, sizeof(res_header));
 }
 
 void authAuthenticate(Client* client, Request* header){
@@ -433,7 +447,7 @@ void authAuthenticate(Client* client, Request* header){
     // TODO: send some error here:
     if(header->packet_len != KYBER_PUBLICKEYBYTES) return;
     uint8_t* pk = calloc(KYBER_PUBLICKEYBYTES, 1);
-    client->read(client, pk, KYBER_PUBLICKEYBYTES);
+    client_read(client, pk, KYBER_PUBLICKEYBYTES);
 
     uint32_t userID = ~0u;
     for(size_t i = 0; i < USERS_COUNT; i++){
@@ -473,16 +487,16 @@ void authAuthenticate(Client* client, Request* header){
         .packet_len = KYBER_CIPHERTEXTBYTES + RAND_COUNT
     };
     response_hton(&test);
-    client->write(client, &test, sizeof(test));
-    client->write(client, ct, KYBER_CIPHERTEXTBYTES + RAND_COUNT);
+    client_write(client, &test, sizeof(test));
+    client_write(client, ct, KYBER_CIPHERTEXTBYTES + RAND_COUNT);
     free(ct);
 
     Request req;
-    assert(client->read(client,&req, sizeof(req)) == 1);
+    assert(client_read(client,&req, sizeof(req)) == 1);
     request_ntoh(&req);
     assert(req.packet_len == RAND_COUNT);
     uint8_t* userRandBytes = calloc(RAND_COUNT, 1);
-    assert(client->read(client, userRandBytes, RAND_COUNT));
+    assert(client_read(client, userRandBytes, RAND_COUNT));
 
     if(memcmp(randBytes, userRandBytes, RAND_COUNT) != 0){
         free(randBytes);
@@ -506,14 +520,22 @@ void authAuthenticate(Client* client, Request* header){
     res_header.opcode = 0;
     res_header.packet_len = sizeof(uint32_t);
     response_hton(&res_header);
-    client->write(client, &res_header, sizeof(res_header));
+    client_write(client, &res_header, sizeof(res_header));
     userID = htonl(userID);
-    client->write(client, &userID, sizeof(userID));
+    client_write(client, &userID, sizeof(userID));
 }
 
 void client_thread(void* fd_void) {
     Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0, .read = unsecure_gtread_exact, .write = unsecure_gtwrite_exact};
     list_init(&client.list);
+    client.read_buffer = malloc(READ_BUFFER_CAPACITY);
+    client.write_buffer = malloc(READ_BUFFER_CAPACITY);
+    // TODO: send some error here:
+    if(!client.read_buffer || !client.write_buffer) {
+        free(client.read_buffer);
+        free(client.write_buffer);
+        return;
+    }
     Request req_header;
     Response res_header;
     for(;;) {
@@ -555,6 +577,8 @@ void client_thread(void* fd_void) {
         proto->funcs[req_header.func_id](&client, &req_header);
     }
     list_remove(&client.list);
+    free(client.read_buffer);
+    free(client.write_buffer);
     closesocket(client.fd);
     fprintf(stderr, "Disconnected!\n");
 }
