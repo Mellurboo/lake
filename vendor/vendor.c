@@ -9,3 +9,6 @@
 
 #define STUI_IMPLEMENTATION
 #include "stui.h"
+
+#define POST_QUANTUM_CRYPT_IMPLEMENTATION
+#include "post_quantum_cryptography.h"

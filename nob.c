@@ -26,7 +26,7 @@ static bool go_run_nob_inside(Nob_Cmd* cmd, const char* dir) {
 }
 
 void help(FILE* sink, const char* exe) {
-    fprintf(sink, "%s (example-client|example-server (run)) \n", exe);
+    fprintf(sink, "%s (example-client|example-server|example-keygen (run)) \n", exe);
 }
 int main(int argc, char** argv) {
     NOB_GO_REBUILD_URSELF(argc, argv);
@@ -47,13 +47,15 @@ int main(int argc, char** argv) {
     enum {
         EXAMPLE_ALL,
         EXAMPLE_CLIENT,
-        EXAMPLE_SERVER
+        EXAMPLE_SERVER,
+        EXAMPLE_KEYGEN,
     } example = EXAMPLE_ALL;
     bool run = false;
     while(argc) {
         const char* arg = shift_args(&argc, &argv);
         if(strcmp(arg, "example-client") == 0) example = EXAMPLE_CLIENT;
         else if(strcmp(arg, "example-server") == 0) example = EXAMPLE_SERVER;
+        else if(strcmp(arg, "example-keygen") == 0) example = EXAMPLE_KEYGEN;
         else if(strcmp(arg, "run") == 0) run = true;
         else {
             nob_log(NOB_ERROR, "Unexpected argument: `%s`", arg);
@@ -68,12 +70,16 @@ int main(int argc, char** argv) {
     case EXAMPLE_ALL:
         if(!go_run_nob_inside(&cmd, "example-client")) return 1;
         if(!go_run_nob_inside(&cmd, "example-server")) return 1;
+        if(!go_run_nob_inside(&cmd, "example-keygen")) return 1;
         break;
     case EXAMPLE_SERVER:
         if(!go_run_nob_inside(&cmd, "example-server")) return 1;
         break;
     case EXAMPLE_CLIENT:
         if(!go_run_nob_inside(&cmd, "example-client")) return 1;
+        break;
+    case EXAMPLE_KEYGEN:
+        if(!go_run_nob_inside(&cmd, "example-keygen")) return 1;
         break;
     }
 
