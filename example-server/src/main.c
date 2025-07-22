@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <list_head.h>
 #include "darray.h"
+#include "post_quantum_cryptography.h"
+#include "fileutils.h"
 
 #define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 #ifdef _WIN32
@@ -131,11 +133,13 @@ typedef struct {
 typedef struct {
     const char* username;
     DMs dms;
+    uint8_t pk[KYBER_PUBLICKEYBYTES];
     // TODO: Mutex this bullsheizung if we do threading
     // List of active connections
     // on that thinger
     struct list_head clients;
 } User;
+
 enum {
     USER_F1L1P,
     USER_DCRAFTBG,
@@ -495,6 +499,28 @@ int main(void) {
     gtinit();
     users[USER_F1L1P].username = "f1l1p";
     users[USER_DCRAFTBG].username = "dcraftbg";
+
+/*
+    //TODO: read keys from database
+    size_t pk_size = 0;
+    char* pk_data = (char*)read_entire_file("./f1l1p.pub", &pk_size);
+    if(pk_size != KYBER_PUBLICKEYBYTES || pk_data == NULL){
+        fprintf(stderr, "Provide valid public key!\n");
+        return 1;
+    }
+    memcpy(users[USER_F1L1P].pk, pk_data, KYBER_PUBLICKEYBYTES);
+    free(pk_data);
+
+    pk_size = 0;
+    pk_data = (char*)read_entire_file("./dcraftbg.pub", &pk_size);
+    if(pk_size != KYBER_PUBLICKEYBYTES || pk_data == NULL){
+        fprintf(stderr, "Provide valid public key!\n");
+        return 1;
+    }
+    memcpy(users[USER_DCRAFTBG].pk, pk_data, KYBER_PUBLICKEYBYTES);
+    free(pk_data);
+*/
+
     list_init(&users[USER_F1L1P].clients);
     list_init(&users[USER_DCRAFTBG].clients);
     int server = socket(AF_INET, SOCK_STREAM, 0);
