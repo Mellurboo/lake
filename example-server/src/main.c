@@ -27,33 +27,17 @@ typedef struct Client Client;
 typedef intptr_t (*client_read_func_t)(Client* client, void* buf, size_t size);
 typedef intptr_t (*client_write_func_t)(Client* client, const void* buf, size_t size);
 
-
-#define AES_PAD(n) (((n + (AES_BLOCKLEN - 1)) / AES_BLOCKLEN) * AES_BLOCKLEN)
-#define WRITE_BUFFER_CAPACITY AES_PAD(4096)
-#define READ_BUFFER_CAPACITY AES_PAD(4096)
-struct Client {
+struct Client{
     struct list_head list;
     int fd;
     uint32_t userID;
     uint32_t notifyID;
 
-    client_read_func_t read;
-    client_write_func_t write;
-
-    uint8_t* write_buffer;
-    // TODO: ring buffer for read_buffer
-    uint8_t* read_buffer;
-    uint32_t write_buffer_head;
-    uint32_t read_buffer_head;
+    bool secure;
     struct AES_ctx aes_ctx;
 };
 
-static intptr_t unsecure_gtread(Client* client, void* buf, size_t size) {
-    gtblockfd(client->fd, GTBLOCKIN);
-    return recv(client->fd, buf, size, 0);
-}
-/*
-static intptr_t unsecure_gtread_exact(Client* client, void* buf, size_t size) {
+static intptr_t gtread_exact(Client* client, void* buf, size_t size) {
     while(size) {
         gtblockfd(client->fd, GTBLOCKIN);
         intptr_t e = recv(client->fd, buf, size, 0);
@@ -64,8 +48,7 @@ static intptr_t unsecure_gtread_exact(Client* client, void* buf, size_t size) {
     }
     return 1;
 }
-*/
-static intptr_t unsecure_gtwrite_exact(Client* client, const void* buf, size_t size) {
+static intptr_t gtwrite_exact(Client* client, const void* buf, size_t size) {
     while(size) {
         gtblockfd(client->fd, GTBLOCKOUT);
         intptr_t e = send(client->fd, buf, size, 0);
@@ -76,47 +59,37 @@ static intptr_t unsecure_gtwrite_exact(Client* client, const void* buf, size_t s
     }
     return 1;
 }
-static intptr_t client_wflush(Client* client) {
-    if(client->write_buffer_head == 0) return 1;
-    intptr_t e = client->write(client, client->write_buffer, client->write_buffer_head);
-    client->write_buffer_head = 0;
+
+intptr_t client_read(Client* client, void* buf, size_t size) {
+    if (!client->secure) return gtread_exact(client, buf, size);
+    size_t paddedSize = (size + 15) & ~15;
+    void* tempBuf = malloc(paddedSize);
+    intptr_t e = gtread_exact(client, tempBuf, paddedSize);
+    if (e < 0) {
+        free(tempBuf);
+        return e;
+    }
+    if (e == 0) {
+        free(tempBuf);
+        return 0;
+    }
+    AES_CBC_decrypt_buffer(&client->aes_ctx, tempBuf, paddedSize);
+    memcpy(buf, tempBuf, size);
+    free(tempBuf);
+    return 1;
+}
+
+intptr_t client_write(Client* client, const void* buf, size_t size) {
+    if (!client->secure) return gtwrite_exact(client, buf, size);
+    size_t paddedSize = (size + 15) & ~15;
+    void* tempBuf = malloc(paddedSize);
+    memcpy(tempBuf, buf, size);
+    uint8_t padValue = paddedSize - size;
+    memset((uint8_t*)tempBuf + size, padValue, padValue);
+    AES_CBC_encrypt_buffer(&client->aes_ctx, tempBuf, paddedSize);
+    intptr_t e = gtwrite_exact(client, tempBuf, paddedSize);
+    free(tempBuf);
     return e;
-}
-// NOTE: kinda assumed but we read exact amount of bytes.
-static intptr_t client_read(Client* client, void* buf, size_t size) {
-    intptr_t e;
-    while(size) {
-        size_t n = size < client->read_buffer_head ? size : client->read_buffer_head;
-        memcpy(buf, client->read_buffer, n);
-        memcpy(client->read_buffer, client->read_buffer + n, READ_BUFFER_CAPACITY - n);
-        buf = ((char*)buf) + (size_t)n;
-        size -= (size_t)n;
-        client->read_buffer_head -= n;
-        if(size) {
-            assert(client->read_buffer_head == 0);
-            e = client->read(client, client->read_buffer, READ_BUFFER_CAPACITY);
-            if(e <= 0) return e;
-            client->read_buffer_head += (size_t)e;
-        }
-    }
-    return 1;
-}
-// NOTE: kinda assumed but we write exact amount of bytes
-static intptr_t client_write(Client* client, const void* buf, size_t size) {
-    intptr_t e;
-    while(size) {
-        size_t buffer_remain = WRITE_BUFFER_CAPACITY - client->write_buffer_head;
-        size_t n = size < buffer_remain ? size : buffer_remain;
-        memcpy(client->write_buffer + client->write_buffer_head, buf, n);
-        client->write_buffer_head += n;
-        size -= n;
-        buf = ((char*)buf) + n;
-        if(client->write_buffer_head == WRITE_BUFFER_CAPACITY) {
-            e = client_wflush(client);
-            if(e <= 0) return e;
-        }
-    }
-    return 1;
 }
 
 #ifdef _WIN32
@@ -261,7 +234,6 @@ void echoEcho(Client* client, Request* header) {
     response_hton(&resp);
     client_write(client, &resp, sizeof(resp));
     client_write(client, buf, header->packet_len);
-    client_wflush(client);
 }
 protocol_func_t echoProtocolFuncs[] = {
     echoEcho,
@@ -350,11 +322,15 @@ void sendMsg(Client* client, Request* header) {
     da_push(&channel->msgs, message);
     for(size_t i = 0; i < channel->participants.len; ++i) {
         uint32_t id = channel->participants.items[i];
+        fprintf(stderr, "Going through participants\n");
         if(id == client->userID) continue;
         User* user = &users[id];
         list_foreach(user_conn_list, &user->clients) {
+            fprintf(stderr, "Going through connections!\n");
             Client* user_conn = (Client*)user_conn_list;
+            fprintf(stderr, "user_conn->notifyID: %02X\n", user_conn->notifyID);
             if(user_conn->notifyID == ~0u) continue;
+            fprintf(stderr, "Notifying this ninja (like linus)\n");
             Response resp = {
                 .packet_id = user_conn->notifyID,
                 .opcode = 0,
@@ -370,9 +346,9 @@ void sendMsg(Client* client, Request* header) {
             };
             notification_hton(&notif);
             // TODO: don't block here? And/or spawn a gt thread for each user we're notifying
-            send(user_conn->fd, &resp, sizeof(Response), 0);
-            send(user_conn->fd, &notif, sizeof(Notification), 0);
-            send(user_conn->fd, msg, msg_len, 0);
+            client_write(user_conn, &resp, sizeof(Response));
+            client_write(user_conn, &notif, sizeof(Notification));
+            client_write(user_conn, msg, msg_len);
         }
     }
     Response resp = {
@@ -382,7 +358,6 @@ void sendMsg(Client* client, Request* header) {
     };
     response_hton(&resp);
     client_write(client, &resp, sizeof(resp));
-    client_wflush(client);
     return;
 err_read:
     free(msg);
@@ -417,7 +392,6 @@ void getMsgsBefore(Client* client, Request* header) {
             client_write(client, &resp, sizeof(resp));
             client_write(client, &msg_resp, sizeof(msg_resp));
             client_write(client, msg->content, msg->content_len);
-            client_wflush(client);
             packet.count--;
         }
     } 
@@ -428,7 +402,6 @@ void getMsgsBefore(Client* client, Request* header) {
     };
     response_hton(&resp);
     client_write(client, &resp, sizeof(resp));
-    client_wflush(client);
 err_read0:
     return;
 } 
@@ -448,7 +421,6 @@ void notify(Client* client, Request* header) {
     };
     response_hton(&resp);
     client_write(client, &resp, sizeof(resp));
-    client_wflush(client);
 }
 protocol_func_t notifyProtocolFuncs[] = {
     notify,
@@ -465,6 +437,7 @@ Protocol protocols[] = {
     PROTOCOL("notify", notifyProtocolFuncs),
 };
 void coreGetProtocols(Client* client, Request* header) {
+    fprintf(stderr, "GetProtocols\n");
     for(size_t i = 0; i < ARRAY_LEN(protocols); ++i) {
         Response res_header;
         res_header.packet_id = header->packet_id;
@@ -482,10 +455,11 @@ void coreGetProtocols(Client* client, Request* header) {
     res_header.packet_len = 0;
     response_hton(&res_header);
     client_write(client, &res_header, sizeof(res_header));
-    client_wflush(client);
 }
 
 void authAuthenticate(Client* client, Request* header){
+    fprintf(stderr, "Authenticate\n");
+
     // TODO: send some error here:
     if(header->packet_len != KYBER_PUBLICKEYBYTES) return;
     uint8_t* pk = calloc(KYBER_PUBLICKEYBYTES, 1);
@@ -501,10 +475,10 @@ void authAuthenticate(Client* client, Request* header){
     }
 
     if(userID == ~0u){
-        error("%d: Couldn't find user", client->fd);
+        fprintf(stderr, "Couldn't find user\n");
         return;
     }else if (userID < USERS_COUNT){
-        info("%d: trying to log in as %s", client->fd, users[userID].username);
+        fprintf(stderr, "Someone is trying to log in as %s\n", users[userID].username);
     }
 
     #define RAND_COUNT 16
@@ -531,7 +505,6 @@ void authAuthenticate(Client* client, Request* header){
     response_hton(&test);
     client_write(client, &test, sizeof(test));
     client_write(client, ct, KYBER_CIPHERTEXTBYTES + RAND_COUNT);
-    client_wflush(client);
     free(ct);
 
     Request req;
@@ -557,7 +530,7 @@ void authAuthenticate(Client* client, Request* header){
     // TODO: mutex this sheizung
     list_remove(&client->list);
     list_insert(&users[client->userID].clients, &client->list);
-    info("%d: Welcome %s!", client->fd, users[client->userID].username);
+    fprintf(stderr, "Welcome %s!\n", users[client->userID].username);
     Response res_header;
     res_header.packet_id = header->packet_id;
     res_header.opcode = 0;
@@ -566,65 +539,56 @@ void authAuthenticate(Client* client, Request* header){
     client_write(client, &res_header, sizeof(res_header));
     userID = htonl(userID);
     client_write(client, &userID, sizeof(userID));
-    client_wflush(client);
+
+    client->secure = true;
 }
 
 void client_thread(void* fd_void) {
-    Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0, .read = unsecure_gtread, .write = unsecure_gtwrite_exact};
+    Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0, .secure = false};
     list_init(&client.list);
-    client.read_buffer = malloc(READ_BUFFER_CAPACITY);
-    client.write_buffer = malloc(WRITE_BUFFER_CAPACITY);
-    // TODO: send some error here:
-    if(!client.read_buffer || !client.write_buffer) {
-        free(client.read_buffer);
-        free(client.write_buffer);
-        return;
-    }
     Request req_header;
     Response res_header;
     for(;;) {
-        int n = client.read(&client, &req_header, sizeof(req_header));
+        int n = client_read(&client, &req_header, sizeof(req_header));
         if(n < 0) break;
         if(n == 0) break;
         request_ntoh(&req_header);
         if(req_header.protocol_id >= ARRAY_LEN(protocols)) {
-            error("%d: Invalid protocol_id: %u", client.fd, req_header.protocol_id);
+            fprintf(stderr, "%d: Invalid protocol_id: %u\n", client.fd, req_header.protocol_id);
             res_header.packet_id = req_header.packet_id;
             res_header.opcode = -ERROR_INVALID_PROTOCOL_ID;
             res_header.packet_len = 0;
             response_hton(&res_header);
-            client.write(&client, &res_header, sizeof(res_header));
+            client_write(&client, &res_header, sizeof(res_header));
             continue;
         }
         Protocol* proto = &protocols[req_header.protocol_id];
         if(req_header.func_id >= proto->funcs_count) {
-            error("%d: Invalid func_id: %u",  client.fd, req_header.func_id);
+            fprintf(stderr, "%d: Invalid func_id: %u\n",  client.fd, req_header.func_id);
             res_header.packet_id = req_header.packet_id;
             res_header.opcode = -ERROR_INVALID_FUNC_ID;
             res_header.packet_len = 0;
             response_hton(&res_header);
-            client.write(&client, &res_header, sizeof(res_header));
+            client_write(&client, &res_header, sizeof(res_header));
             continue;
         }
 
         if (client.userID == (uint32_t)-1 && req_header.protocol_id >= 2){
-            error("%d: Not Authenticated", client.fd);
+            fprintf(stderr, "%d: Not Authenticated\n", client.fd);
             res_header.packet_id = req_header.packet_id;
             res_header.opcode = -ERROR_NOT_AUTH;
             res_header.packet_len = 0;
             response_hton(&res_header);
-            client.write(&client, &res_header, sizeof(res_header));
+            client_write(&client, &res_header, sizeof(res_header));
             continue;
         }
 
-        trace("%d: %s func_id=%d", client.fd, proto->name, req_header.func_id);
+        fprintf(stderr, "INFO: %d: %s func_id=%d\n", client.fd, proto->name, req_header.func_id);
         proto->funcs[req_header.func_id](&client, &req_header);
     }
     list_remove(&client.list);
-    free(client.read_buffer);
-    free(client.write_buffer);
     closesocket(client.fd);
-    info("%d: disconnected", client.fd);
+    fprintf(stderr, "Disconnected!\n");
 }
 #define PORT 6969
 int main(void) {
@@ -636,14 +600,14 @@ int main(void) {
     size_t pk_size = 0;
     users[USER_F1L1P].pk = (uint8_t*)read_entire_file("./f1l1p.pub", &pk_size);
     if(pk_size != KYBER_PUBLICKEYBYTES || users[USER_F1L1P].pk == NULL){
-        fatal("Provide valid public key for f1l1p");
+        fprintf(stderr, "Provide valid public key!\n");
         return 1;
     }
 
     pk_size = 0;
     users[USER_DCRAFTBG].pk = (uint8_t*)read_entire_file("./dcraftbg.pub", &pk_size);
     if(pk_size != KYBER_PUBLICKEYBYTES || users[USER_DCRAFTBG].pk == NULL){
-        fatal("Provide valid public key for dcraftbg");
+        fprintf(stderr, "Provide valid public key!\n");
         return 1;
     }
 

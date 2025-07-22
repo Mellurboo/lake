@@ -52,69 +52,25 @@ void sendMsgRequest_hton(SendMsgRequest* packet) {
 }
 
 typedef struct Client Client;
+
 typedef intptr_t (*client_read_func_t)(Client* client, void* buf, size_t size);
 typedef intptr_t (*client_write_func_t)(Client* client, const void* buf, size_t size);
-#define AES_PAD(n) (((n + (AES_BLOCKLEN - 1)) / AES_BLOCKLEN) * AES_BLOCKLEN)
-#define WRITE_BUFFER_CAPACITY AES_PAD(4096)
-#define READ_BUFFER_CAPACITY AES_PAD(4096)
-struct Client {
-    int fd;
-    client_read_func_t read;
-    client_write_func_t write;
 
-    uint32_t write_buffer_head;
-    uint8_t write_buffer[WRITE_BUFFER_CAPACITY];
-    uint32_t read_buffer_head;
-    // TODO: ring buffer for read_buffer
-    uint8_t read_buffer[READ_BUFFER_CAPACITY];
+struct Client{
+    int fd;
+    uint32_t userID;
+    uint32_t notifyID;
+
+    bool secure;
     struct AES_ctx aes_ctx;
 };
-// NOTE: kinda assumed but we read exact amount of bytes.
-static intptr_t client_read(Client* client, void* buf, size_t size) {
-    intptr_t e;
+
+Client client = {0};
+
+static intptr_t gtread_exact(Client* client, void* buf, size_t size) {
     while(size) {
-        size_t n = size < client->read_buffer_head ? size : client->read_buffer_head;
-        memcpy(buf, client->read_buffer, n);
-        memcpy(client->read_buffer, client->read_buffer + n, READ_BUFFER_CAPACITY - n);
-        buf = ((char*)buf) + (size_t)n;
-        size -= (size_t)n;
-        client->read_buffer_head -= n;
-        if(size) {
-            assert(client->read_buffer_head == 0);
-            e = client->read(client, client->read_buffer, READ_BUFFER_CAPACITY);
-            if(e <= 0) return e;
-            client->read_buffer_head += (size_t)e;
-        }
-    }
-    return 1;
-}
-static intptr_t client_wflush(Client* client) {
-    if(client->write_buffer_head == 0) return 1;
-    intptr_t e = client->write(client, client->write_buffer, client->write_buffer_head);
-    client->write_buffer_head = 0;
-    return e;
-}
-// NOTE: kinda assumed but we write exact amount of bytes
-static intptr_t client_write(Client* client, const void* buf, size_t size) {
-    intptr_t e;
-    while(size) {
-        size_t buffer_remain = WRITE_BUFFER_CAPACITY - client->write_buffer_head;
-        size_t n = size < buffer_remain ? size : buffer_remain;
-        memcpy(client->write_buffer + client->write_buffer_head, buf, n);
-        client->write_buffer_head += n;
-        size -= n;
-        buf = ((char*)buf) + n;
-        if(client->write_buffer_head == WRITE_BUFFER_CAPACITY) {
-            e = client_wflush(client);
-            if(e <= 0) return e;
-        }
-    }
-    return 1;
-}
-static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
-    while(size) {
-        gtblockfd(fd, GTBLOCKIN);
-        intptr_t e = recv(fd, buf, size, 0);
+        gtblockfd(client->fd, GTBLOCKIN);
+        intptr_t e = recv(client->fd, buf, size, 0);
         if(e < 0) return e;
         if(e == 0) return 0; 
         buf = ((char*)buf) + (size_t)e;
@@ -122,29 +78,50 @@ static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
     }
     return 1;
 }
-static intptr_t unsecure_gtread(Client* client, void* buf, size_t size) {
-    fprintf(stderr, "We start blocking...\n");
-    gtblockfd(client->fd, GTBLOCKIN);
-    fprintf(stderr, "We blocked!\n");
-    intptr_t e = recv(client->fd, buf, size, 0);
-    fprintf(stderr, "We received: %ld\n", e);
+static intptr_t gtwrite_exact(Client* client, const void* buf, size_t size) {
+    while(size) {
+        gtblockfd(client->fd, GTBLOCKOUT);
+        intptr_t e = send(client->fd, buf, size, 0);
+        if(e < 0) return e;
+        if(e == 0) return 0; 
+        buf = ((char*)buf) + (size_t)e;
+        size -= (size_t)e;
+    }
+    return 1;
+}
+
+intptr_t client_read(Client* client, void* buf, size_t size) {
+    if (!client->secure) return gtread_exact(client, buf, size);
+    size_t paddedSize = (size + 15) & ~15;
+    void* tempBuf = malloc(paddedSize);
+    intptr_t e = gtread_exact(client, tempBuf, paddedSize);
+    if (e < 0) {
+        free(tempBuf);
+        return e;
+    }
+    if (e == 0) {
+        free(tempBuf);
+        return 0;
+    }
+    AES_CBC_decrypt_buffer(&client->aes_ctx, tempBuf, paddedSize);
+    memcpy(buf, tempBuf, size);
+    free(tempBuf);
+    return 1;
+}
+
+intptr_t client_write(Client* client, const void* buf, size_t size) {
+    if (!client->secure) return gtwrite_exact(client, buf, size);
+    size_t paddedSize = (size + 15) & ~15;
+    void* tempBuf = malloc(paddedSize);
+    memcpy(tempBuf, buf, size);
+    uint8_t padValue = paddedSize - size;
+    memset((uint8_t*)tempBuf + size, padValue, padValue);
+    AES_CBC_encrypt_buffer(&client->aes_ctx, tempBuf, paddedSize);
+    intptr_t e = gtwrite_exact(client, tempBuf, paddedSize);
+    free(tempBuf);
     return e;
 }
 
-static intptr_t gtwrite_exact(int fd, const void* buf, size_t size) {
-    while(size) {
-        gtblockfd(fd, GTBLOCKOUT);
-        intptr_t e = send(fd, buf, size, 0);
-        if(e < 0) return e;
-        if(e == 0) return 0; 
-        buf = ((char*)buf) + (size_t)e;
-        size -= (size_t)e;
-    }
-    return 1;
-}
-static intptr_t unsecure_gtwrite_exact(Client* client, const void* buf, size_t size) {
-    return gtwrite_exact(client->fd, buf, size);
-}
 typedef struct {
     uint32_t server_id;
     uint32_t channel_id;
@@ -335,7 +312,6 @@ void onNotification(Client* client, Response* response, IncomingEvent* event) {
     assert(response->opcode == 0);
     assert(response->packet_len > sizeof(Notification));
     Notification notif;
-
     // TODO: error check
     client_read(client, &notif, sizeof(notif));
     notification_ntoh(&notif);
@@ -408,10 +384,8 @@ int main(int argc, const char** argv) {
     gtinit();
     prev_term_flags = stui_term_get_flags();
     atexit(restore_prev_term);
-    static Client client = { 0 };
-    client.read = unsecure_gtread;
-    client.write = unsecure_gtwrite_exact;
     client.fd = socket(AF_INET, SOCK_STREAM, 0); 
+    client.secure = false;
     if(client.fd < 0) {
         fprintf(stderr, "FATAL: Could not create server socket: %s\n", sneterr());
         return 1;
@@ -487,11 +461,12 @@ int main(int argc, const char** argv) {
         fprintf(stderr, "FATAL: Failed to send request: %s\n", sneterr());
         return 1;
     }
-    client_wflush(&client);
     Response resp; 
+
     uint32_t auth_protocol_id = 0;
     // uint32_t echo_protocol_id = 0;
     uint32_t msg_protocol_id = 0;
+
     uint32_t notify_protocol_id = 0;
     for(;;) {
         e = client_read(&client, &resp, sizeof(resp));
@@ -541,7 +516,6 @@ int main(int argc, const char** argv) {
         request_hton(&req);
         client_write(&client, &req, sizeof(req));
         client_write(&client, pk, KYBER_PUBLICKEYBYTES);
-        client_wflush(&client);
 
         e = client_read(&client, &resp, sizeof(resp));
         assert(e == 1);
@@ -569,7 +543,6 @@ int main(int argc, const char** argv) {
         request_hton(&req);
         client_write(&client, &req, sizeof(req));
         client_write(&client, cipherData + KYBER_CIPHERTEXTBYTES, 16);
-        client_wflush(&client);
 
         free(cipherData);
 
@@ -582,6 +555,8 @@ int main(int argc, const char** argv) {
         e = client_read(&client, &userID, sizeof(uint32_t));
         assert(e == 1);
         userID = ntohl(userID);
+
+        client.secure = true;
     }
     dming = ~0;
     {
@@ -611,9 +586,8 @@ int main(int argc, const char** argv) {
         messagesBeforeRequest_hton(&msgs_request);
         client_write(&client, &request, sizeof(request));
         client_write(&client, &msgs_request, sizeof(msgs_request));
-        client_wflush(&client);
-
         Response resp;
+        fprintf(stderr, "We in here:\n");
         // TODO: ^^verify things
         for(;;) {
             client_read(&client, &resp, sizeof(resp));
@@ -645,7 +619,7 @@ int main(int argc, const char** argv) {
     stui_term_get_size(&term_width, &term_height);
     stui_setsize(term_width, term_height);
     stui_term_set_flags(STUI_TERM_FLAG_INSTANT);
-    gtgo(reader_thread, (void*)&client);
+    gtgo(reader_thread, &client);
     size_t notif_event = allocate_incoming_event();
     incoming_events[notif_event].as.onNotification.msgs = &msgs;
     incoming_events[notif_event].onEvent = onNotification;
@@ -659,7 +633,6 @@ int main(int argc, const char** argv) {
         };
         request_hton(&req);
         client_write(&client, &req, sizeof(Request));
-        client_wflush(&client);
     }
     for(;;) {
         redraw();
@@ -697,7 +670,6 @@ int main(int argc, const char** argv) {
             client_write(&client, &req, sizeof(req));
             client_write(&client, &send_msg, sizeof(send_msg));
             client_write(&client, prompt.items, prompt.len);
-            client_wflush(&client);
             prompt.len = 0;
         } break;
         default:
