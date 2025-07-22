@@ -350,15 +350,11 @@ void sendMsg(Client* client, Request* header) {
     da_push(&channel->msgs, message);
     for(size_t i = 0; i < channel->participants.len; ++i) {
         uint32_t id = channel->participants.items[i];
-        fprintf(stderr, "Going through participants\n");
         if(id == client->userID) continue;
         User* user = &users[id];
         list_foreach(user_conn_list, &user->clients) {
-            fprintf(stderr, "Going through connections!\n");
             Client* user_conn = (Client*)user_conn_list;
-            fprintf(stderr, "user_conn->notifyID: %02X\n", user_conn->notifyID);
             if(user_conn->notifyID == ~0u) continue;
-            fprintf(stderr, "Notifying this ninja (like linus)\n");
             Response resp = {
                 .packet_id = user_conn->notifyID,
                 .opcode = 0,
