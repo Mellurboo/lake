@@ -35,6 +35,8 @@ struct Client{
 
     client_read_func_t read;
     client_write_func_t write;
+
+    struct AES_ctx aes_ctx;
 };
 
 static intptr_t unsecure_gtread_exact(Client* client, void* buf, size_t size) {
@@ -133,7 +135,7 @@ typedef struct {
 typedef struct {
     const char* username;
     DMs dms;
-    uint8_t pk[KYBER_PUBLICKEYBYTES];
+    uint8_t* pk;
     // TODO: Mutex this bullsheizung if we do threading
     // List of active connections
     // on that thinger
@@ -429,9 +431,69 @@ void authAuthenticate(Client* client, Request* header){
     fprintf(stderr, "Authenticate\n");
 
     // TODO: send some error here:
-    if(header->packet_len != sizeof(uint32_t)) return;
-    client->read(client, &client->userID, sizeof(uint32_t));
-    uint32_t userID = ntohl(client->userID);
+    if(header->packet_len != KYBER_PUBLICKEYBYTES) return;
+    uint8_t* pk = calloc(KYBER_PUBLICKEYBYTES, 1);
+    client->read(client, pk, KYBER_PUBLICKEYBYTES);
+
+    uint32_t userID = ~0u;
+    for(size_t i = 0; i < USERS_COUNT; i++){
+        if(memcmp(pk, users[i].pk, KYBER_PUBLICKEYBYTES) == 0){
+            free(pk);
+            userID = i;
+            break;
+        }
+    }
+
+    if(userID == ~0u){
+        fprintf(stderr, "Couldn't find user\n");
+        return;
+    }else if (userID < USERS_COUNT){
+        fprintf(stderr, "Someone is trying to log in as %s\n", users[userID].username);
+    }
+
+    #define RAND_COUNT 16
+    uint8_t* ct = calloc(KYBER_CIPHERTEXTBYTES + RAND_COUNT, 1);
+
+    uint8_t* ss = calloc(KYBER_SSBYTES, 1);
+    
+    
+    crypto_kem_enc(ct, ss, users[userID].pk);
+
+    AES_init_ctx(&client->aes_ctx, ss);
+    free(ss);
+
+    uint8_t* randBytes = calloc(RAND_COUNT, 1);
+    randombytes(randBytes, RAND_COUNT);
+    memcpy(ct + KYBER_CIPHERTEXTBYTES, randBytes, RAND_COUNT);
+    AES_CBC_encrypt_buffer(&client->aes_ctx, ct + KYBER_CIPHERTEXTBYTES, RAND_COUNT);
+
+    Response test = {
+        .packet_id = header->packet_id,
+        .opcode = 0,
+        .packet_len = KYBER_CIPHERTEXTBYTES + RAND_COUNT
+    };
+    response_hton(&test);
+    client->write(client, &test, sizeof(test));
+    client->write(client, ct, KYBER_CIPHERTEXTBYTES + RAND_COUNT);
+    free(ct);
+
+    Request req;
+    assert(client->read(client,&req, sizeof(req)) == 1);
+    request_ntoh(&req);
+    assert(req.packet_len == RAND_COUNT);
+    uint8_t* userRandBytes = calloc(RAND_COUNT, 1);
+    assert(client->read(client, userRandBytes, RAND_COUNT));
+
+    if(memcmp(randBytes, userRandBytes, RAND_COUNT) != 0){
+        free(randBytes);
+        free(userRandBytes);
+        //TODO: send some error here
+        return;
+    }
+
+    free(randBytes);
+    free(userRandBytes);
+
     // TODO: send some error here:
     if(userID >= USERS_COUNT) return;
     client->userID = userID;
@@ -442,9 +504,11 @@ void authAuthenticate(Client* client, Request* header){
     Response res_header;
     res_header.packet_id = header->packet_id;
     res_header.opcode = 0;
-    res_header.packet_len = 0;
+    res_header.packet_len = sizeof(uint32_t);
     response_hton(&res_header);
     client->write(client, &res_header, sizeof(res_header));
+    userID = htonl(userID);
+    client->write(client, &userID, sizeof(userID));
 }
 
 void client_thread(void* fd_void) {
@@ -500,26 +564,20 @@ int main(void) {
     users[USER_F1L1P].username = "f1l1p";
     users[USER_DCRAFTBG].username = "dcraftbg";
 
-/*
     //TODO: read keys from database
     size_t pk_size = 0;
-    char* pk_data = (char*)read_entire_file("./f1l1p.pub", &pk_size);
-    if(pk_size != KYBER_PUBLICKEYBYTES || pk_data == NULL){
+    users[USER_F1L1P].pk = (uint8_t*)read_entire_file("./f1l1p.pub", &pk_size);
+    if(pk_size != KYBER_PUBLICKEYBYTES || users[USER_F1L1P].pk == NULL){
         fprintf(stderr, "Provide valid public key!\n");
         return 1;
     }
-    memcpy(users[USER_F1L1P].pk, pk_data, KYBER_PUBLICKEYBYTES);
-    free(pk_data);
 
     pk_size = 0;
-    pk_data = (char*)read_entire_file("./dcraftbg.pub", &pk_size);
-    if(pk_size != KYBER_PUBLICKEYBYTES || pk_data == NULL){
+    users[USER_DCRAFTBG].pk = (uint8_t*)read_entire_file("./dcraftbg.pub", &pk_size);
+    if(pk_size != KYBER_PUBLICKEYBYTES || users[USER_DCRAFTBG].pk == NULL){
         fprintf(stderr, "Provide valid public key!\n");
         return 1;
     }
-    memcpy(users[USER_DCRAFTBG].pk, pk_data, KYBER_PUBLICKEYBYTES);
-    free(pk_data);
-*/
 
     list_init(&users[USER_F1L1P].clients);
     list_init(&users[USER_DCRAFTBG].clients);

@@ -8,6 +8,9 @@
 #include <stui.h>
 #include <darray.h>
 #include <signal.h>
+#include "fileutils.h"
+#include "post_quantum_cryptography.h"
+#include <stdbool.h>
 
 #ifdef _WIN32
 #else
@@ -47,6 +50,8 @@ void sendMsgRequest_hton(SendMsgRequest* packet) {
     packet->server_id = htonl(packet->server_id);
     packet->channel_id = htonl(packet->channel_id);
 }
+
+struct AES_ctx aes_ctx = {0};
 
 static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
     while(size) {
@@ -345,6 +350,11 @@ int main(int argc, const char** argv) {
     const char* hostname = "localhost";
     uint32_t port = 6969;
 
+    char public_key_name[256] = {0};
+    char secret_key_name[256] = {0};
+    uint8_t* pk = NULL;
+    uint8_t* sk = NULL;
+
     while(argc) {
         const char* arg = shift_args(&argc, &argv);
         if(strcmp(arg, "-p") == 0) {
@@ -353,6 +363,28 @@ int main(int argc, const char** argv) {
         } else if(strcmp(arg, "-ip") == 0) {
             assert(argc && "IP PLS MOTHERFUCKA");
             hostname = shift_args(&argc, &argv);
+        } else if(strcmp(arg, "-key") == 0){
+            arg = shift_args(&argc, &argv);
+            snprintf(public_key_name, sizeof(public_key_name), "%s.pub", arg);
+            snprintf(secret_key_name, sizeof(secret_key_name), "%s.priv", arg);
+        }
+    }
+
+    if(public_key_name[0] != 0){
+        size_t read_size = 0;
+        pk = (uint8_t*)read_entire_file(public_key_name, &read_size);
+        if(read_size != KYBER_PUBLICKEYBYTES || pk == NULL){
+            fprintf(stderr, "Provide valid public key!\n");
+            return 1;
+        }
+    }
+
+    if(secret_key_name[0] != 0){
+        size_t read_size = 0;
+        sk = (uint8_t*)read_entire_file(secret_key_name, &read_size);
+        if(read_size != KYBER_SECRETKEYBYTES || sk == NULL){
+            fprintf(stderr, "Provide valid sekret key!\n");
+            return 1;
         }
     }
 
@@ -420,27 +452,61 @@ int main(int argc, const char** argv) {
     fprintf(stderr, "Sent request successfully!\n");
     uint32_t userID = 0;
     if(auth_protocol_id) {
-        char buf[128];
-        printf("Server requires auth please provide userID:\n> ");
+        printf("Server requires auth\n");
         fflush(stdout);
-        char* _ = fgets(buf, sizeof(buf), stdin);
-        (void)_;
-        userID = atoi(buf);
-        userID = htonl(userID);
+
+        if(public_key_name[0] == '0'){
+            fprintf(stderr, "Provide keys!\n");
+            return 1;
+        }
+
         Request req = {
             .protocol_id = auth_protocol_id,
             .func_id = 0,
             .packet_id = packet_id++,
-            .packet_len = sizeof(uint32_t)
+            .packet_len = KYBER_PUBLICKEYBYTES
         };
         request_hton(&req);
         gtwrite_exact(client, &req, sizeof(req));
-        gtwrite_exact(client, &userID, sizeof(userID));
+        gtwrite_exact(client, pk, KYBER_PUBLICKEYBYTES);
+
         e = gtread_exact(client, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.opcode == 0);
-        assert(resp.packet_len == 0);
+        assert(resp.packet_len == KYBER_CIPHERTEXTBYTES + 16);
+        uint8_t* cipherData = calloc(KYBER_CIPHERTEXTBYTES + 16, 1);
+        
+        e = gtread_exact(client, cipherData, KYBER_CIPHERTEXTBYTES + 16);
+        assert(e == 1);
+
+        uint8_t* ss = calloc(KYBER_SSBYTES, 1);
+        crypto_kem_dec(ss, cipherData, sk);
+        AES_init_ctx(&aes_ctx, ss);
+        free(ss);
+
+        AES_CBC_decrypt_buffer(&aes_ctx, cipherData + KYBER_CIPHERTEXTBYTES, 16);
+
+        req = (Request){
+            .protocol_id = auth_protocol_id,
+            .func_id = 0,
+            .packet_id = packet_id++,
+            .packet_len = 16
+        };
+        request_hton(&req);
+        gtwrite_exact(client, &req, sizeof(req));
+        gtwrite_exact(client, cipherData + KYBER_CIPHERTEXTBYTES, 16);
+
+        free(cipherData);
+
+        e = gtread_exact(client, &resp, sizeof(resp));
+        assert(e == 1);
+        response_ntoh(&resp);
+        assert(resp.opcode == 0);
+        assert(resp.packet_len == sizeof(uint32_t));
+
+        e = gtread_exact(client, &userID, sizeof(uint32_t));
+        assert(e == 1);
         userID = ntohl(userID);
     }
     dming = ~0;
