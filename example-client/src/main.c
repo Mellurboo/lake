@@ -51,8 +51,66 @@ void sendMsgRequest_hton(SendMsgRequest* packet) {
     packet->channel_id = htonl(packet->channel_id);
 }
 
-struct AES_ctx aes_ctx = {0};
+typedef struct Client Client;
+typedef intptr_t (*client_read_func_t)(Client* client, void* buf, size_t size);
+typedef intptr_t (*client_write_func_t)(Client* client, const void* buf, size_t size);
+#define AES_PAD(n) (((n + (AES_BLOCKLEN - 1)) / AES_BLOCKLEN) * AES_BLOCKLEN)
+#define WRITE_BUFFER_CAPACITY AES_PAD(4096)
+#define READ_BUFFER_CAPACITY AES_PAD(4096)
+struct Client {
+    int fd;
+    client_read_func_t read;
+    client_write_func_t write;
 
+    uint8_t* write_buffer;
+    // TODO: ring buffer for read_buffer
+    uint8_t* read_buffer;
+    uint32_t write_buffer_head;
+    uint32_t read_buffer_head;
+    struct AES_ctx aes_ctx;
+};
+// NOTE: kinda assumed but we read exact amount of bytes.
+static intptr_t client_read(Client* client, void* buf, size_t size) {
+    intptr_t e;
+    while(size) {
+        size_t n = size < client->read_buffer_head ? size : client->read_buffer_head;
+        memcpy(buf, client->read_buffer, n);
+        memcpy(client->read_buffer, client->read_buffer + n, READ_BUFFER_CAPACITY - n);
+        buf = ((char*)buf) + (size_t)n;
+        size -= (size_t)n;
+        client->read_buffer_head -= n;
+        if(size) {
+            assert(client->read_buffer_head == 0);
+            e = client->read(client, client->read_buffer, READ_BUFFER_CAPACITY);
+            if(e <= 0) return e;
+            client->read_buffer_head += (size_t)e;
+        }
+    }
+    return 1;
+}
+static intptr_t client_wflush(Client* client) {
+    if(client->write_buffer_head == 0) return 1;
+    intptr_t e = client->write(client, client->write_buffer, client->write_buffer_head);
+    client->write_buffer_head = 0;
+    return e;
+}
+// NOTE: kinda assumed but we write exact amount of bytes
+static intptr_t client_write(Client* client, const void* buf, size_t size) {
+    intptr_t e;
+    while(size) {
+        size_t buffer_remain = WRITE_BUFFER_CAPACITY - client->write_buffer_head;
+        size_t n = size < buffer_remain ? size : buffer_remain;
+        memcpy(client->write_buffer + client->write_buffer_head, buf, n);
+        client->write_buffer_head += n;
+        size -= n;
+        buf = ((char*)buf) + n;
+        if(client->write_buffer_head == WRITE_BUFFER_CAPACITY) {
+            e = client_wflush(client);
+            if(e <= 0) return e;
+        }
+    }
+    return 1;
+}
 static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
     while(size) {
         gtblockfd(fd, GTBLOCKIN);
@@ -64,7 +122,12 @@ static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
     }
     return 1;
 }
-static intptr_t gtwrite_exact(uintptr_t fd, const void* buf, size_t size) {
+static intptr_t unsecure_gtread(Client* client, void* buf, size_t size) {
+    gtblockfd(client->fd, GTBLOCKIN);
+    return recv(client->fd, buf, size, 0);
+}
+
+static intptr_t gtwrite_exact(int fd, const void* buf, size_t size) {
     while(size) {
         gtblockfd(fd, GTBLOCKOUT);
         intptr_t e = send(fd, buf, size, 0);
@@ -74,6 +137,9 @@ static intptr_t gtwrite_exact(uintptr_t fd, const void* buf, size_t size) {
         size -= (size_t)e;
     }
     return 1;
+}
+static intptr_t unsecure_gtwrite_exact(Client* client, const void* buf, size_t size) {
+    return gtwrite_exact(client->fd, buf, size);
 }
 typedef struct {
     uint32_t server_id;
@@ -185,7 +251,7 @@ typedef struct {
     size_t len, cap;
 } StringBuilder;
 typedef struct IncomingEvent IncomingEvent;
-typedef void (*event_handler_t)(int fd, Response* response, IncomingEvent* event);
+typedef void (*event_handler_t)(Client* client, Response* response, IncomingEvent* event);
 struct IncomingEvent {
     event_handler_t onEvent;
     union {
@@ -208,12 +274,12 @@ size_t allocate_incoming_event(void) {
     // unreachable
     // return ~0;
 }
-void reader_thread(void* fd_void) {
-    int fd = (uintptr_t)fd_void;
+void reader_thread(void* client_void) {
+    Client* client = client_void;
     int e;
     for(;;) {
         Response resp; 
-        e = gtread_exact(fd, &resp, sizeof(resp));
+        e = gtread_exact(client->fd, &resp, sizeof(resp));
         if(e != 1) break;
         response_ntoh(&resp);
         // TODO: skip resp.len amount maybe?
@@ -225,7 +291,7 @@ void reader_thread(void* fd_void) {
             fprintf(stderr, "We got some unhandled (bogus?) event with packet_id: %u\n", resp.packet_id);
             continue;
         }
-        incoming_events[resp.packet_id].onEvent(fd, &resp, &incoming_events[resp.packet_id]);
+        incoming_events[resp.packet_id].onEvent(client, &resp, &incoming_events[resp.packet_id]);
     }
     fprintf(stderr, "Some sort of IO error occured. I don't know how to handle this right now. Probably just disconnect\n");
     fprintf(stderr, "ERROR: %s", sneterr());
@@ -233,8 +299,8 @@ void reader_thread(void* fd_void) {
 }
 
 void redraw(void);
-void okOnMessage(int fd, Response* response, IncomingEvent* event) {
-    (void)fd;
+void okOnMessage(Client* client, Response* response, IncomingEvent* event) {
+    (void)client;
     (void)response;
     da_push(event->as.onMessage.msgs, event->as.onMessage.msg);
     event->onEvent = NULL;
@@ -259,19 +325,19 @@ static const char* author_names[] = {
     "f1l1p",
     "dcraftbg"
 };
-void onNotification(int fd, Response* response, IncomingEvent* event) {
+void onNotification(Client* client, Response* response, IncomingEvent* event) {
     // SKIP
     if(response->packet_len == 0) return;
     assert(response->opcode == 0);
     assert(response->packet_len > sizeof(Notification));
     Notification notif;
     // TODO: error check
-    gtread_exact(fd, &notif, sizeof(notif));
+    gtread_exact(client->fd, &notif, sizeof(notif));
     notification_ntoh(&notif);
     size_t content_len = response->packet_len - sizeof(Notification);
     char* content = malloc(content_len);
     // TODO: error check
-    gtread_exact(fd, content, content_len);
+    gtread_exact(client->fd, content, content_len);
     uint64_t milis = (((uint64_t)notif.milis_high) << 32) | (uint64_t)notif.milis_low;
     Message msg = {
         .content_len = content_len,
@@ -337,15 +403,16 @@ int main(int argc, const char** argv) {
     gtinit();
     prev_term_flags = stui_term_get_flags();
     atexit(restore_prev_term);
-    int client = socket(AF_INET, SOCK_STREAM, 0); 
-    if(client < 0) {
+    static Client client = { 0 };
+    client.fd = socket(AF_INET, SOCK_STREAM, 0); 
+    if(client.fd < 0) {
         fprintf(stderr, "FATAL: Could not create server socket: %s\n", sneterr());
         return 1;
     }
     int opt = 1;
-    if(setsockopt(client, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    if(setsockopt(client.fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         fprintf(stderr, "FATAL: Could not set SO_REUSEADDR: %s\n", sneterr());
-        closesocket(client);
+        closesocket(client.fd);
         return 1;
     }
     const char* hostname = "localhost";
@@ -401,14 +468,14 @@ int main(int argc, const char** argv) {
         memcpy(&server_addr.sin_addr, he->h_addr_list[0], he->h_length);
     }
 
-    if(connect(client, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+    if(connect(client.fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         fprintf(stderr, "FATAL: Couldn't connect to %s %d: %s\n", hostname, PORT, sneterr());
         return 1;
     }
 
     size_t packet_id = 0;
     size_t get_extensions_id = packet_id++;
-    int e = send(client, &(Request) { .protocol_id = 0, .func_id = 0, .packet_id = htonl(get_extensions_id), .packet_len = 0 }, sizeof(Request), 0);
+    int e = send(client.fd, &(Request) { .protocol_id = 0, .func_id = 0, .packet_id = htonl(get_extensions_id), .packet_len = 0 }, sizeof(Request), 0);
     if(e < 0) {
         fprintf(stderr, "FATAL: Failed to send request: %s\n", sneterr());
         return 1;
@@ -422,7 +489,7 @@ int main(int argc, const char** argv) {
 
     uint32_t notify_protocol_id = 0;
     for(;;) {
-        e = gtread_exact(client, &resp, sizeof(resp));
+        e = gtread_exact(client.fd, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.packet_id == get_extensions_id);
@@ -431,7 +498,7 @@ int main(int argc, const char** argv) {
 
         assert(resp.packet_len >= sizeof(uint32_t));
         Protocol* protocol = malloc(resp.packet_len + 1);
-        assert(gtread_exact(client, protocol, resp.packet_len) == 1);
+        assert(gtread_exact(client.fd, protocol, resp.packet_len) == 1);
         protocol->id = ntohl(protocol->id);
         protocol->name[resp.packet_len-sizeof(uint32_t)] = '\0';
         if(((int)resp.opcode) < 0) {
@@ -467,25 +534,25 @@ int main(int argc, const char** argv) {
             .packet_len = KYBER_PUBLICKEYBYTES
         };
         request_hton(&req);
-        gtwrite_exact(client, &req, sizeof(req));
-        gtwrite_exact(client, pk, KYBER_PUBLICKEYBYTES);
+        gtwrite_exact(client.fd, &req, sizeof(req));
+        gtwrite_exact(client.fd, pk, KYBER_PUBLICKEYBYTES);
 
-        e = gtread_exact(client, &resp, sizeof(resp));
+        e = gtread_exact(client.fd, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.opcode == 0);
         assert(resp.packet_len == KYBER_CIPHERTEXTBYTES + 16);
         uint8_t* cipherData = calloc(KYBER_CIPHERTEXTBYTES + 16, 1);
         
-        e = gtread_exact(client, cipherData, KYBER_CIPHERTEXTBYTES + 16);
+        e = gtread_exact(client.fd, cipherData, KYBER_CIPHERTEXTBYTES + 16);
         assert(e == 1);
 
         uint8_t* ss = calloc(KYBER_SSBYTES, 1);
         crypto_kem_dec(ss, cipherData, sk);
-        AES_init_ctx(&aes_ctx, ss);
+        AES_init_ctx(&client.aes_ctx, ss);
         free(ss);
 
-        AES_CBC_decrypt_buffer(&aes_ctx, cipherData + KYBER_CIPHERTEXTBYTES, 16);
+        AES_CBC_decrypt_buffer(&client.aes_ctx, cipherData + KYBER_CIPHERTEXTBYTES, 16);
 
         req = (Request){
             .protocol_id = auth_protocol_id,
@@ -494,18 +561,18 @@ int main(int argc, const char** argv) {
             .packet_len = 16
         };
         request_hton(&req);
-        gtwrite_exact(client, &req, sizeof(req));
-        gtwrite_exact(client, cipherData + KYBER_CIPHERTEXTBYTES, 16);
+        gtwrite_exact(client.fd, &req, sizeof(req));
+        gtwrite_exact(client.fd, cipherData + KYBER_CIPHERTEXTBYTES, 16);
 
         free(cipherData);
 
-        e = gtread_exact(client, &resp, sizeof(resp));
+        e = gtread_exact(client.fd, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.opcode == 0);
         assert(resp.packet_len == sizeof(uint32_t));
 
-        e = gtread_exact(client, &userID, sizeof(uint32_t));
+        e = gtread_exact(client.fd, &userID, sizeof(uint32_t));
         assert(e == 1);
         userID = ntohl(userID);
     }
@@ -535,13 +602,13 @@ int main(int argc, const char** argv) {
             .count = 100,
         };
         messagesBeforeRequest_hton(&msgs_request);
-        gtwrite_exact(client, &request, sizeof(request));
-        gtwrite_exact(client, &msgs_request, sizeof(msgs_request));
+        gtwrite_exact(client.fd, &request, sizeof(request));
+        gtwrite_exact(client.fd, &msgs_request, sizeof(msgs_request));
         Response resp;
         fprintf(stderr, "We in here:\n");
         // TODO: ^^verify things
         for(;;) {
-            gtread_exact(client, &resp, sizeof(resp));
+            gtread_exact(client.fd, &resp, sizeof(resp));
             response_ntoh(&resp);
             // TODO: ^^verify things
             // TODO: I don't know how to handle such case:
@@ -550,10 +617,10 @@ int main(int argc, const char** argv) {
             size_t content_len = resp.packet_len - sizeof(MessagesBeforeResponse);
             char* content = malloc(content_len);
             MessagesBeforeResponse msgs_resp;
-            gtread_exact(client, &msgs_resp, sizeof(MessagesBeforeResponse));
+            gtread_exact(client.fd, &msgs_resp, sizeof(MessagesBeforeResponse));
             messagesBeforeResponse_ntoh(&msgs_resp);
             uint64_t milis = (((uint64_t)msgs_resp.milis_high) << 32) | (uint64_t)msgs_resp.milis_low;
-            gtread_exact(client, content, content_len);
+            gtread_exact(client.fd, content, content_len);
 
             // TODO: verify all this sheize^
             Message msg = {
@@ -570,7 +637,7 @@ int main(int argc, const char** argv) {
     stui_term_get_size(&term_width, &term_height);
     stui_setsize(term_width, term_height);
     stui_term_set_flags(STUI_TERM_FLAG_INSTANT);
-    gtgo(reader_thread, (void*)(uintptr_t)client);
+    gtgo(reader_thread, (void*)&client);
     size_t notif_event = allocate_incoming_event();
     incoming_events[notif_event].as.onNotification.msgs = &msgs;
     incoming_events[notif_event].onEvent = onNotification;
@@ -583,7 +650,7 @@ int main(int argc, const char** argv) {
             .packet_len = 0,
         };
         request_hton(&req);
-        gtwrite_exact(client, &req, sizeof(Request));
+        gtwrite_exact(client.fd, &req, sizeof(Request));
     }
     for(;;) {
         redraw();
@@ -618,9 +685,9 @@ int main(int argc, const char** argv) {
             };
             request_hton(&req);
             sendMsgRequest_hton(&send_msg);
-            gtwrite_exact(client, &req, sizeof(req));
-            gtwrite_exact(client, &send_msg, sizeof(send_msg));
-            gtwrite_exact(client, prompt.items, prompt.len);
+            gtwrite_exact(client.fd, &req, sizeof(req));
+            gtwrite_exact(client.fd, &send_msg, sizeof(send_msg));
+            gtwrite_exact(client.fd, prompt.items, prompt.len);
             prompt.len = 0;
         } break;
         default:
@@ -629,6 +696,6 @@ int main(int argc, const char** argv) {
         }
     }
 end:
-    closesocket(client);
+    closesocket(client.fd);
     return 0;
 }
