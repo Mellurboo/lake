@@ -41,12 +41,18 @@ struct Client {
     client_write_func_t write;
 
     uint8_t* write_buffer;
+    // TODO: ring buffer for read_buffer
     uint8_t* read_buffer;
     uint32_t write_buffer_head;
     uint32_t read_buffer_head;
     struct AES_ctx aes_ctx;
 };
 
+static intptr_t unsecure_gtread(Client* client, void* buf, size_t size) {
+    gtblockfd(client->fd, GTBLOCKIN);
+    return recv(client->fd, buf, size, 0);
+}
+/*
 static intptr_t unsecure_gtread_exact(Client* client, void* buf, size_t size) {
     while(size) {
         gtblockfd(client->fd, GTBLOCKIN);
@@ -58,6 +64,7 @@ static intptr_t unsecure_gtread_exact(Client* client, void* buf, size_t size) {
     }
     return 1;
 }
+*/
 static intptr_t unsecure_gtwrite_exact(Client* client, const void* buf, size_t size) {
     while(size) {
         gtblockfd(client->fd, GTBLOCKOUT);
@@ -75,9 +82,26 @@ static intptr_t client_wflush(Client* client) {
     client->write_buffer_head = 0;
     return e;
 }
+// NOTE: kinda assumed but we read exact amount of bytes.
 static intptr_t client_read(Client* client, void* buf, size_t size) {
-    return client->read(client, buf, size);
+    intptr_t e;
+    while(size) {
+        size_t n = size < client->read_buffer_head ? size : client->read_buffer_head;
+        memcpy(buf, client->read_buffer, n);
+        memcpy(client->read_buffer, client->read_buffer + n, READ_BUFFER_CAPACITY - n);
+        buf = ((char*)buf) + (size_t)n;
+        size -= (size_t)n;
+        client->read_buffer_head -= n;
+        if(size) {
+            assert(client->read_buffer_head == 0);
+            e = client->read(client, client->read_buffer, READ_BUFFER_CAPACITY);
+            if(e <= 0) return e;
+            client->read_buffer_head += (size_t)e;
+        }
+    }
+    return 1;
 }
+// NOTE: kinda assumed but we write exact amount of bytes
 static intptr_t client_write(Client* client, const void* buf, size_t size) {
     intptr_t e;
     while(size) {
@@ -553,7 +577,7 @@ void authAuthenticate(Client* client, Request* header){
 }
 
 void client_thread(void* fd_void) {
-    Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0, .read = unsecure_gtread_exact, .write = unsecure_gtwrite_exact};
+    Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0, .read = unsecure_gtread, .write = unsecure_gtwrite_exact};
     list_init(&client.list);
     client.read_buffer = malloc(READ_BUFFER_CAPACITY);
     client.write_buffer = malloc(WRITE_BUFFER_CAPACITY);
