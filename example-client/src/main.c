@@ -62,11 +62,11 @@ struct Client {
     client_read_func_t read;
     client_write_func_t write;
 
-    uint8_t* write_buffer;
-    // TODO: ring buffer for read_buffer
-    uint8_t* read_buffer;
     uint32_t write_buffer_head;
+    uint8_t write_buffer[WRITE_BUFFER_CAPACITY];
     uint32_t read_buffer_head;
+    // TODO: ring buffer for read_buffer
+    uint8_t read_buffer[READ_BUFFER_CAPACITY];
     struct AES_ctx aes_ctx;
 };
 // NOTE: kinda assumed but we read exact amount of bytes.
@@ -76,6 +76,7 @@ static intptr_t client_read(Client* client, void* buf, size_t size) {
         size_t n = size < client->read_buffer_head ? size : client->read_buffer_head;
         memcpy(buf, client->read_buffer, n);
         memcpy(client->read_buffer, client->read_buffer + n, READ_BUFFER_CAPACITY - n);
+        fprintf(stderr, "Eating %zu cached!\n", n);
         buf = ((char*)buf) + (size_t)n;
         size -= (size_t)n;
         client->read_buffer_head -= n;
@@ -123,8 +124,12 @@ static intptr_t gtread_exact(uintptr_t fd, void* buf, size_t size) {
     return 1;
 }
 static intptr_t unsecure_gtread(Client* client, void* buf, size_t size) {
+    fprintf(stderr, "We start blocking...\n");
     gtblockfd(client->fd, GTBLOCKIN);
-    return recv(client->fd, buf, size, 0);
+    fprintf(stderr, "We blocked!\n");
+    intptr_t e = recv(client->fd, buf, size, 0);
+    fprintf(stderr, "We received: %ld\n", e);
+    return e;
 }
 
 static intptr_t gtwrite_exact(int fd, const void* buf, size_t size) {
@@ -279,7 +284,9 @@ void reader_thread(void* client_void) {
     int e;
     for(;;) {
         Response resp; 
-        e = gtread_exact(client->fd, &resp, sizeof(resp));
+        fprintf(stderr, "Reading response.\n");
+        e = client_read(client, &resp, sizeof(resp));
+        fprintf(stderr, "We got something?\n");
         if(e != 1) break;
         response_ntoh(&resp);
         // TODO: skip resp.len amount maybe?
@@ -326,18 +333,24 @@ static const char* author_names[] = {
     "dcraftbg"
 };
 void onNotification(Client* client, Response* response, IncomingEvent* event) {
+    fprintf(stderr, "onNotification We got something?\n");
     // SKIP
     if(response->packet_len == 0) return;
     assert(response->opcode == 0);
     assert(response->packet_len > sizeof(Notification));
     Notification notif;
+
     // TODO: error check
-    gtread_exact(client->fd, &notif, sizeof(notif));
+    fprintf(stderr, "Bitch here?\n");
+    client_read(client, &notif, sizeof(notif));
+    fprintf(stderr, "Bitch here (end)?\n");
     notification_ntoh(&notif);
     size_t content_len = response->packet_len - sizeof(Notification);
     char* content = malloc(content_len);
     // TODO: error check
-    gtread_exact(client->fd, content, content_len);
+    fprintf(stderr, "No here bitch?\n");
+    client_read(client, content, content_len);
+    fprintf(stderr, "No here bitch (end)?\n");
     uint64_t milis = (((uint64_t)notif.milis_high) << 32) | (uint64_t)notif.milis_low;
     Message msg = {
         .content_len = content_len,
@@ -404,6 +417,8 @@ int main(int argc, const char** argv) {
     prev_term_flags = stui_term_get_flags();
     atexit(restore_prev_term);
     static Client client = { 0 };
+    client.read = unsecure_gtread;
+    client.write = unsecure_gtwrite_exact;
     client.fd = socket(AF_INET, SOCK_STREAM, 0); 
     if(client.fd < 0) {
         fprintf(stderr, "FATAL: Could not create server socket: %s\n", sneterr());
@@ -475,21 +490,19 @@ int main(int argc, const char** argv) {
 
     size_t packet_id = 0;
     size_t get_extensions_id = packet_id++;
-    int e = send(client.fd, &(Request) { .protocol_id = 0, .func_id = 0, .packet_id = htonl(get_extensions_id), .packet_len = 0 }, sizeof(Request), 0);
+    int e = client_write(&client, &(Request) { .protocol_id = 0, .func_id = 0, .packet_id = htonl(get_extensions_id), .packet_len = 0 }, sizeof(Request));
     if(e < 0) {
         fprintf(stderr, "FATAL: Failed to send request: %s\n", sneterr());
         return 1;
     }
-    assert(e == sizeof(Request));
+    client_wflush(&client);
     Response resp; 
-
     uint32_t auth_protocol_id = 0;
     // uint32_t echo_protocol_id = 0;
     uint32_t msg_protocol_id = 0;
-
     uint32_t notify_protocol_id = 0;
     for(;;) {
-        e = gtread_exact(client.fd, &resp, sizeof(resp));
+        e = client_read(&client, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.packet_id == get_extensions_id);
@@ -498,7 +511,7 @@ int main(int argc, const char** argv) {
 
         assert(resp.packet_len >= sizeof(uint32_t));
         Protocol* protocol = malloc(resp.packet_len + 1);
-        assert(gtread_exact(client.fd, protocol, resp.packet_len) == 1);
+        assert(client_read(&client, protocol, resp.packet_len) == 1);
         protocol->id = ntohl(protocol->id);
         protocol->name[resp.packet_len-sizeof(uint32_t)] = '\0';
         if(((int)resp.opcode) < 0) {
@@ -534,17 +547,18 @@ int main(int argc, const char** argv) {
             .packet_len = KYBER_PUBLICKEYBYTES
         };
         request_hton(&req);
-        gtwrite_exact(client.fd, &req, sizeof(req));
-        gtwrite_exact(client.fd, pk, KYBER_PUBLICKEYBYTES);
+        client_write(&client, &req, sizeof(req));
+        client_write(&client, pk, KYBER_PUBLICKEYBYTES);
+        client_wflush(&client);
 
-        e = gtread_exact(client.fd, &resp, sizeof(resp));
+        e = client_read(&client, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.opcode == 0);
         assert(resp.packet_len == KYBER_CIPHERTEXTBYTES + 16);
         uint8_t* cipherData = calloc(KYBER_CIPHERTEXTBYTES + 16, 1);
         
-        e = gtread_exact(client.fd, cipherData, KYBER_CIPHERTEXTBYTES + 16);
+        e = client_read(&client, cipherData, KYBER_CIPHERTEXTBYTES + 16);
         assert(e == 1);
 
         uint8_t* ss = calloc(KYBER_SSBYTES, 1);
@@ -561,18 +575,19 @@ int main(int argc, const char** argv) {
             .packet_len = 16
         };
         request_hton(&req);
-        gtwrite_exact(client.fd, &req, sizeof(req));
-        gtwrite_exact(client.fd, cipherData + KYBER_CIPHERTEXTBYTES, 16);
+        client_write(&client, &req, sizeof(req));
+        client_write(&client, cipherData + KYBER_CIPHERTEXTBYTES, 16);
+        client_wflush(&client);
 
         free(cipherData);
 
-        e = gtread_exact(client.fd, &resp, sizeof(resp));
+        e = client_read(&client, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.opcode == 0);
         assert(resp.packet_len == sizeof(uint32_t));
 
-        e = gtread_exact(client.fd, &userID, sizeof(uint32_t));
+        e = client_read(&client, &userID, sizeof(uint32_t));
         assert(e == 1);
         userID = ntohl(userID);
     }
@@ -602,13 +617,15 @@ int main(int argc, const char** argv) {
             .count = 100,
         };
         messagesBeforeRequest_hton(&msgs_request);
-        gtwrite_exact(client.fd, &request, sizeof(request));
-        gtwrite_exact(client.fd, &msgs_request, sizeof(msgs_request));
+        client_write(&client, &request, sizeof(request));
+        client_write(&client, &msgs_request, sizeof(msgs_request));
+        client_wflush(&client);
+
         Response resp;
         fprintf(stderr, "We in here:\n");
         // TODO: ^^verify things
         for(;;) {
-            gtread_exact(client.fd, &resp, sizeof(resp));
+            client_read(&client, &resp, sizeof(resp));
             response_ntoh(&resp);
             // TODO: ^^verify things
             // TODO: I don't know how to handle such case:
@@ -617,10 +634,10 @@ int main(int argc, const char** argv) {
             size_t content_len = resp.packet_len - sizeof(MessagesBeforeResponse);
             char* content = malloc(content_len);
             MessagesBeforeResponse msgs_resp;
-            gtread_exact(client.fd, &msgs_resp, sizeof(MessagesBeforeResponse));
+            client_read(&client, &msgs_resp, sizeof(MessagesBeforeResponse));
             messagesBeforeResponse_ntoh(&msgs_resp);
             uint64_t milis = (((uint64_t)msgs_resp.milis_high) << 32) | (uint64_t)msgs_resp.milis_low;
-            gtread_exact(client.fd, content, content_len);
+            client_read(&client, content, content_len);
 
             // TODO: verify all this sheize^
             Message msg = {
@@ -650,7 +667,8 @@ int main(int argc, const char** argv) {
             .packet_len = 0,
         };
         request_hton(&req);
-        gtwrite_exact(client.fd, &req, sizeof(Request));
+        client_write(&client, &req, sizeof(Request));
+        client_wflush(&client);
     }
     for(;;) {
         redraw();
@@ -685,9 +703,10 @@ int main(int argc, const char** argv) {
             };
             request_hton(&req);
             sendMsgRequest_hton(&send_msg);
-            gtwrite_exact(client.fd, &req, sizeof(req));
-            gtwrite_exact(client.fd, &send_msg, sizeof(send_msg));
-            gtwrite_exact(client.fd, prompt.items, prompt.len);
+            client_write(&client, &req, sizeof(req));
+            client_write(&client, &send_msg, sizeof(send_msg));
+            client_write(&client, prompt.items, prompt.len);
+            client_wflush(&client);
             prompt.len = 0;
         } break;
         default:
