@@ -76,7 +76,6 @@ static intptr_t client_read(Client* client, void* buf, size_t size) {
         size_t n = size < client->read_buffer_head ? size : client->read_buffer_head;
         memcpy(buf, client->read_buffer, n);
         memcpy(client->read_buffer, client->read_buffer + n, READ_BUFFER_CAPACITY - n);
-        fprintf(stderr, "Eating %zu cached!\n", n);
         buf = ((char*)buf) + (size_t)n;
         size -= (size_t)n;
         client->read_buffer_head -= n;
@@ -284,9 +283,7 @@ void reader_thread(void* client_void) {
     int e;
     for(;;) {
         Response resp; 
-        fprintf(stderr, "Reading response.\n");
         e = client_read(client, &resp, sizeof(resp));
-        fprintf(stderr, "We got something?\n");
         if(e != 1) break;
         response_ntoh(&resp);
         // TODO: skip resp.len amount maybe?
@@ -333,7 +330,6 @@ static const char* author_names[] = {
     "dcraftbg"
 };
 void onNotification(Client* client, Response* response, IncomingEvent* event) {
-    fprintf(stderr, "onNotification We got something?\n");
     // SKIP
     if(response->packet_len == 0) return;
     assert(response->opcode == 0);
@@ -341,16 +337,12 @@ void onNotification(Client* client, Response* response, IncomingEvent* event) {
     Notification notif;
 
     // TODO: error check
-    fprintf(stderr, "Bitch here?\n");
     client_read(client, &notif, sizeof(notif));
-    fprintf(stderr, "Bitch here (end)?\n");
     notification_ntoh(&notif);
     size_t content_len = response->packet_len - sizeof(Notification);
     char* content = malloc(content_len);
     // TODO: error check
-    fprintf(stderr, "No here bitch?\n");
     client_read(client, content, content_len);
-    fprintf(stderr, "No here bitch (end)?\n");
     uint64_t milis = (((uint64_t)notif.milis_high) << 32) | (uint64_t)notif.milis_low;
     Message msg = {
         .content_len = content_len,
@@ -622,7 +614,6 @@ int main(int argc, const char** argv) {
         client_wflush(&client);
 
         Response resp;
-        fprintf(stderr, "We in here:\n");
         // TODO: ^^verify things
         for(;;) {
             client_read(&client, &resp, sizeof(resp));
