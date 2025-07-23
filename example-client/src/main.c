@@ -448,6 +448,9 @@ int main(int argc, const char** argv) {
     uint8_t* pk = NULL;
     uint8_t* sk = NULL;
 
+
+    const char* exe = shift_args(&argc, &argv);
+    (void)exe;
     while(argc) {
         const char* arg = shift_args(&argc, &argv);
         if(strcmp(arg, "-p") == 0) {
@@ -460,6 +463,9 @@ int main(int argc, const char** argv) {
             arg = shift_args(&argc, &argv);
             snprintf(public_key_name, sizeof(public_key_name), "%s.pub", arg);
             snprintf(secret_key_name, sizeof(secret_key_name), "%s.priv", arg);
+        } else {
+            fprintf(stderr, "ERROR: unexpected argument `%s`\n", arg);
+            return 1;
         }
     }
     if(public_key_name[0] != 0){
