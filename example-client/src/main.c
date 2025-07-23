@@ -350,6 +350,7 @@ static const char* author_names[] = {
     "f1l1p",
     "dcraftbg"
 };
+uint32_t dming;
 void onNotification(Client* client, Response* response, IncomingEvent* event) {
     // SKIP
     if(response->packet_len == 0) return;
@@ -363,6 +364,11 @@ void onNotification(Client* client, Response* response, IncomingEvent* event) {
     char* content = malloc(content_len);
     // TODO: error check
     client_read_(client, content, content_len);
+
+    if(notif.server_id != 0 || notif.channel_id != dming) {
+        free(content);
+        return;
+    }
     uint64_t milis = (((uint64_t)notif.milis_high) << 32) | (uint64_t)notif.milis_low;
     Message msg = {
         .content_len = content_len,
@@ -373,7 +379,6 @@ void onNotification(Client* client, Response* response, IncomingEvent* event) {
     da_push(event->as.onNotification.msgs, msg);
     redraw();
 }
-uint32_t dming;
 Messages msgs;
 size_t term_width, term_height;
 StringBuilder prompt = { 0 };

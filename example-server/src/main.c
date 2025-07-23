@@ -374,7 +374,7 @@ void sendMsg(Client* client, Request* header) {
             response_hton(&resp);
             Notification notif = {
                 .server_id = packet.server_id,
-                .channel_id = packet.channel_id,
+                .channel_id = packet.server_id == 0 ? client->userID : packet.channel_id,
                 .author_id = message.author,
                 .milis_low = message.milis,
                 .milis_high = message.milis >> 32,
