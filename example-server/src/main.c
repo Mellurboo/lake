@@ -361,11 +361,11 @@ void sendMsg(Client* client, Request* header) {
     da_push(&channel->msgs, message);
     for(size_t i = 0; i < channel->participants.len; ++i) {
         uint32_t id = channel->participants.items[i];
-        if(id == client->userID) continue;
         User* user = &users[id];
         list_foreach(user_conn_list, &user->clients) {
             Client* user_conn = (Client*)user_conn_list;
             if(user_conn->notifyID == ~0u) continue;
+            if(user_conn == client) continue;
             Response resp = {
                 .packet_id = user_conn->notifyID,
                 .opcode = 0,
@@ -374,7 +374,7 @@ void sendMsg(Client* client, Request* header) {
             response_hton(&resp);
             Notification notif = {
                 .server_id = packet.server_id,
-                .channel_id = packet.server_id == 0 ? client->userID : packet.channel_id,
+                .channel_id = packet.server_id == 0 ? channel->participants.items[(i + 1) % 2] : packet.channel_id,
                 .author_id = message.author,
                 .milis_low = message.milis,
                 .milis_high = message.milis >> 32,
