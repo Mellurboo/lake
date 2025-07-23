@@ -705,6 +705,8 @@ int main(int argc, const char** argv) {
             if(prompt.len) prompt.len--;
             break;
         case '\n': {
+            // FIXME: sending empty message causes it to go bogus amogus
+            if(prompt.len == 0) continue;
             if(prompt.len == 5 && memcmp(prompt.items, ":quit", prompt.len) == 0) goto end;
             Request req = {
                 .protocol_id = msg_protocol_id,
