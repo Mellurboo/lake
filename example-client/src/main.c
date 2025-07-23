@@ -17,6 +17,7 @@
 # include <time.h>
 #endif
 
+#define ALIGN16(n) (((n) + 15) & ~15)
 #define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 
 uint64_t time_unix_milis(void) {
@@ -50,23 +51,30 @@ void sendMsgRequest_hton(SendMsgRequest* packet) {
     packet->server_id = htonl(packet->server_id);
     packet->channel_id = htonl(packet->channel_id);
 }
+typedef struct {
+    uint8_t* items;
+    size_t cap, len; // <- how much data is already in here
+} PacketBuilder;
 
-typedef struct Client Client;
-
-typedef intptr_t (*client_read_func_t)(Client* client, void* buf, size_t size);
-typedef intptr_t (*client_write_func_t)(Client* client, const void* buf, size_t size);
-
-struct Client{
+static void pbwrite(PacketBuilder* pb, const void* buf, size_t size) {
+    da_reserve(pb, ALIGN16(size));
+    memcpy(pb->items + pb->len, buf, size);
+    pb->len += size;
+}
+typedef struct {
     int fd;
     uint32_t userID;
     uint32_t notifyID;
 
+    bool has_read_buffer_data;
+    uint8_t read_buffer_head;
+    uint8_t read_buffer[16];
+
+    PacketBuilder pb;
+
     bool secure;
     struct AES_ctx aes_ctx;
-};
-
-Client client = {0};
-
+} Client;
 static intptr_t gtread_exact(Client* client, void* buf, size_t size) {
     while(size) {
         gtblockfd(client->fd, GTBLOCKIN);
@@ -78,10 +86,10 @@ static intptr_t gtread_exact(Client* client, void* buf, size_t size) {
     }
     return 1;
 }
-static intptr_t gtwrite_exact(Client* client, const void* buf, size_t size) {
+static intptr_t gtwrite_exact(int fd, const void* buf, size_t size) {
     while(size) {
-        gtblockfd(client->fd, GTBLOCKOUT);
-        intptr_t e = send(client->fd, buf, size, 0);
+        gtblockfd(fd, GTBLOCKOUT);
+        intptr_t e = send(fd, buf, size, 0);
         if(e < 0) return e;
         if(e == 0) return 0; 
         buf = ((char*)buf) + (size_t)e;
@@ -90,38 +98,73 @@ static intptr_t gtwrite_exact(Client* client, const void* buf, size_t size) {
     return 1;
 }
 
-intptr_t client_read(Client* client, void* buf, size_t size) {
-    if (!client->secure) return gtread_exact(client, buf, size);
-    size_t paddedSize = (size + 15) & ~15;
-    void* tempBuf = malloc(paddedSize);
-    intptr_t e = gtread_exact(client, tempBuf, paddedSize);
-    if (e < 0) {
-        free(tempBuf);
-        return e;
-    }
-    if (e == 0) {
-        free(tempBuf);
-        return 0;
-    }
-    AES_CBC_decrypt_buffer(&client->aes_ctx, tempBuf, paddedSize);
-    memcpy(buf, tempBuf, size);
-    free(tempBuf);
+
+// NOTE: must be aligned to 16 (aka AES_BLOCKLEN)
+intptr_t client_do_read(Client* client, void* buf, size_t size) {
+    intptr_t e = gtread_exact(client, buf, size);
+    if (!client->secure || e <= 0) return e;
+    AES_CBC_decrypt_buffer(&client->aes_ctx, buf, size);
     return 1;
 }
+intptr_t client_read_(Client* client, void* buf, size_t size) {
+    intptr_t e;
+    if(client->has_read_buffer_data) {
+        size_t buf_remaining = sizeof(client->read_buffer) - client->read_buffer_head;
+        size_t n = buf_remaining < size ? buf_remaining : size;
+        memcpy(buf, client->read_buffer + client->read_buffer_head, n);
+        client->read_buffer_head += n;
+        client->read_buffer_head %= sizeof(client->read_buffer);
+        buf = (char*)buf + n;
+        size -= n;
+        if(size == 0) return 1;
+    }
+    // read whole chunks of 16
+    {
+        size_t n = size / sizeof(client->read_buffer) * sizeof(client->read_buffer);
+        e = client_do_read(client, buf, n);
+        if(e <= 0) return e;
+        buf = (char*)buf + n;
+        size -= n;
+    }
+    client->has_read_buffer_data = false;
 
-intptr_t client_write(Client* client, const void* buf, size_t size) {
-    if (!client->secure) return gtwrite_exact(client, buf, size);
-    size_t paddedSize = (size + 15) & ~15;
-    void* tempBuf = malloc(paddedSize);
-    memcpy(tempBuf, buf, size);
-    uint8_t padValue = paddedSize - size;
-    memset((uint8_t*)tempBuf + size, padValue, padValue);
-    AES_CBC_encrypt_buffer(&client->aes_ctx, tempBuf, paddedSize);
-    intptr_t e = gtwrite_exact(client, tempBuf, paddedSize);
-    free(tempBuf);
-    return e;
+    assert(size <= 16);
+    // read leftover into read buffer and then copy back to buf.
+    if(size) {
+        e = client_do_read(client, client->read_buffer, ALIGN16(size));
+        if(e <= 0) return e;
+        memcpy(buf, client->read_buffer, size);
+        client->read_buffer_head = size;
+        client->has_read_buffer_data = true;
+        buf = (char*)buf + size;
+        size = 0;
+    }
+    return 1;
+}
+static void client_discard_read_buf(Client* c) {
+    c->has_read_buffer_data = false;
+    c->read_buffer_head = 0;
 }
 
+static intptr_t client_do_write(Client* client, void* buf, size_t size) {
+    if (client->secure) AES_CBC_encrypt_buffer(&client->aes_ctx, buf, size);
+    return gtwrite_exact(client->fd, buf, size);
+}
+static intptr_t pbflush(PacketBuilder* pb, Client* client) {
+#if 0
+    fprintf(stderr, "Sending:   ");
+    for(size_t i = 0; i < ALIGN16(pb->len); ++i) {
+        if(i % 4 == 0) fprintf(stderr, " ");
+        if(i % (4 * 16) == 0) fprintf(stderr, "\n    ");
+        fprintf(stderr, "%02X", pb->items[i]);
+    }
+    fprintf(stderr, "\n");
+#endif
+    intptr_t e = client_do_write(client, pb->items, ALIGN16(pb->len));
+    pb->len = 0;
+    return e;
+}
+Client client = {0};
 typedef struct {
     uint32_t server_id;
     uint32_t channel_id;
@@ -260,7 +303,8 @@ void reader_thread(void* client_void) {
     int e;
     for(;;) {
         Response resp; 
-        e = client_read(client, &resp, sizeof(resp));
+        client_discard_read_buf(client);
+        e = client_read_(client, &resp, sizeof(resp));
         if(e != 1) break;
         response_ntoh(&resp);
         // TODO: skip resp.len amount maybe?
@@ -313,12 +357,12 @@ void onNotification(Client* client, Response* response, IncomingEvent* event) {
     assert(response->packet_len > sizeof(Notification));
     Notification notif;
     // TODO: error check
-    client_read(client, &notif, sizeof(notif));
+    client_read_(client, &notif, sizeof(notif));
     notification_ntoh(&notif);
     size_t content_len = response->packet_len - sizeof(Notification);
     char* content = malloc(content_len);
     // TODO: error check
-    client_read(client, content, content_len);
+    client_read_(client, content, content_len);
     uint64_t milis = (((uint64_t)notif.milis_high) << 32) | (uint64_t)notif.milis_low;
     Message msg = {
         .content_len = content_len,
@@ -456,7 +500,8 @@ int main(int argc, const char** argv) {
 
     size_t packet_id = 0;
     size_t get_extensions_id = packet_id++;
-    int e = client_write(&client, &(Request) { .protocol_id = 0, .func_id = 0, .packet_id = htonl(get_extensions_id), .packet_len = 0 }, sizeof(Request));
+    pbwrite(&client.pb, &(Request) { .protocol_id = 0, .func_id = 0, .packet_id = htonl(get_extensions_id), .packet_len = 0 }, sizeof(Request));
+    intptr_t e = pbflush(&client.pb, &client);
     if(e < 0) {
         fprintf(stderr, "FATAL: Failed to send request: %s\n", sneterr());
         return 1;
@@ -469,18 +514,21 @@ int main(int argc, const char** argv) {
 
     uint32_t notify_protocol_id = 0;
     for(;;) {
-        e = client_read(&client, &resp, sizeof(resp));
+        client_discard_read_buf(&client);
+        e = client_read_(&client, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.packet_id == get_extensions_id);
         assert(resp.packet_len < 1024);
+        fprintf(stderr, "packet_id=%u packet_len=%u opcode=%d\n", resp.packet_id, resp.packet_len, (int)resp.opcode);
         if(resp.packet_len == 0) break;
 
         assert(resp.packet_len >= sizeof(uint32_t));
+        size_t name_len = resp.packet_len - sizeof(uint32_t);
         Protocol* protocol = malloc(resp.packet_len + 1);
-        assert(client_read(&client, protocol, resp.packet_len) == 1);
+        assert(client_read_(&client, protocol, resp.packet_len) == 1);
         protocol->id = ntohl(protocol->id);
-        protocol->name[resp.packet_len-sizeof(uint32_t)] = '\0';
+        protocol->name[name_len] = '\0';
         if(((int)resp.opcode) < 0) {
             fprintf(stderr, "FATAL: Error on my response: %d\n", -((int)resp.opcode));
             return 1;
@@ -514,17 +562,19 @@ int main(int argc, const char** argv) {
             .packet_len = KYBER_PUBLICKEYBYTES
         };
         request_hton(&req);
-        client_write(&client, &req, sizeof(req));
-        client_write(&client, pk, KYBER_PUBLICKEYBYTES);
+        pbwrite(&client.pb, &req, sizeof(req));
+        pbwrite(&client.pb, pk, KYBER_PUBLICKEYBYTES);
+        pbflush(&client.pb, &client);
 
-        e = client_read(&client, &resp, sizeof(resp));
+        client_discard_read_buf(&client);
+        e = client_read_(&client, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.opcode == 0);
         assert(resp.packet_len == KYBER_CIPHERTEXTBYTES + 16);
         uint8_t* cipherData = calloc(KYBER_CIPHERTEXTBYTES + 16, 1);
         
-        e = client_read(&client, cipherData, KYBER_CIPHERTEXTBYTES + 16);
+        e = client_read_(&client, cipherData, KYBER_CIPHERTEXTBYTES + 16);
         assert(e == 1);
 
         uint8_t* ss = calloc(KYBER_SSBYTES, 1);
@@ -541,18 +591,20 @@ int main(int argc, const char** argv) {
             .packet_len = 16
         };
         request_hton(&req);
-        client_write(&client, &req, sizeof(req));
-        client_write(&client, cipherData + KYBER_CIPHERTEXTBYTES, 16);
+        pbwrite(&client.pb, &req, sizeof(req));
+        pbwrite(&client.pb, cipherData + KYBER_CIPHERTEXTBYTES, 16);
+        pbflush(&client.pb, &client);
 
         free(cipherData);
 
-        e = client_read(&client, &resp, sizeof(resp));
+        client_discard_read_buf(&client);
+        e = client_read_(&client, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.opcode == 0);
         assert(resp.packet_len == sizeof(uint32_t));
 
-        e = client_read(&client, &userID, sizeof(uint32_t));
+        e = client_read_(&client, &userID, sizeof(uint32_t));
         assert(e == 1);
         userID = ntohl(userID);
 
@@ -584,13 +636,15 @@ int main(int argc, const char** argv) {
             .count = 100,
         };
         messagesBeforeRequest_hton(&msgs_request);
-        client_write(&client, &request, sizeof(request));
-        client_write(&client, &msgs_request, sizeof(msgs_request));
+        pbwrite(&client.pb, &request, sizeof(request));
+        pbwrite(&client.pb, &msgs_request, sizeof(msgs_request));
+        pbflush(&client.pb, &client);
         Response resp;
         fprintf(stderr, "We in here:\n");
         // TODO: ^^verify things
         for(;;) {
-            client_read(&client, &resp, sizeof(resp));
+            client_discard_read_buf(&client);
+            client_read_(&client, &resp, sizeof(resp));
             response_ntoh(&resp);
             // TODO: ^^verify things
             // TODO: I don't know how to handle such case:
@@ -599,10 +653,10 @@ int main(int argc, const char** argv) {
             size_t content_len = resp.packet_len - sizeof(MessagesBeforeResponse);
             char* content = malloc(content_len);
             MessagesBeforeResponse msgs_resp;
-            client_read(&client, &msgs_resp, sizeof(MessagesBeforeResponse));
+            client_read_(&client, &msgs_resp, sizeof(MessagesBeforeResponse));
             messagesBeforeResponse_ntoh(&msgs_resp);
             uint64_t milis = (((uint64_t)msgs_resp.milis_high) << 32) | (uint64_t)msgs_resp.milis_low;
-            client_read(&client, content, content_len);
+            client_read_(&client, content, content_len);
 
             // TODO: verify all this sheize^
             Message msg = {
@@ -632,7 +686,8 @@ int main(int argc, const char** argv) {
             .packet_len = 0,
         };
         request_hton(&req);
-        client_write(&client, &req, sizeof(Request));
+        pbwrite(&client.pb, &req, sizeof(Request));
+        pbflush(&client.pb, &client);
     }
     for(;;) {
         redraw();
@@ -667,9 +722,10 @@ int main(int argc, const char** argv) {
             };
             request_hton(&req);
             sendMsgRequest_hton(&send_msg);
-            client_write(&client, &req, sizeof(req));
-            client_write(&client, &send_msg, sizeof(send_msg));
-            client_write(&client, prompt.items, prompt.len);
+            pbwrite(&client.pb, &req, sizeof(req));
+            pbwrite(&client.pb, &send_msg, sizeof(send_msg));
+            pbwrite(&client.pb, prompt.items, prompt.len);
+            pbflush(&client.pb, &client);
             prompt.len = 0;
         } break;
         default:
