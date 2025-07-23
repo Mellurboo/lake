@@ -126,13 +126,6 @@ static intptr_t client_do_write(Client* client, void* buf, size_t size) {
 }
 
 static intptr_t pbflush(PacketBuilder* pb, Client* client) {
-    fprintf(stderr, "Sending:   ");
-    for(size_t i = 0; i < ALIGN16(pb->len); ++i) {
-        if(i % 4 == 0) fprintf(stderr, " ");
-        if(i % (4 * 16) == 0) fprintf(stderr, "\n    ");
-        fprintf(stderr, "%02X", pb->items[i]);
-    }
-    fprintf(stderr, "\n");
     intptr_t e = client_do_write(client, pb->items, ALIGN16(pb->len));
     pb->len = 0;
     return e;
@@ -368,15 +361,11 @@ void sendMsg(Client* client, Request* header) {
     da_push(&channel->msgs, message);
     for(size_t i = 0; i < channel->participants.len; ++i) {
         uint32_t id = channel->participants.items[i];
-        fprintf(stderr, "Going through participants\n");
         if(id == client->userID) continue;
         User* user = &users[id];
         list_foreach(user_conn_list, &user->clients) {
-            fprintf(stderr, "Going through connections!\n");
             Client* user_conn = (Client*)user_conn_list;
-            fprintf(stderr, "user_conn->notifyID: %02X\n", user_conn->notifyID);
             if(user_conn->notifyID == ~0u) continue;
-            fprintf(stderr, "Notifying this ninja (like linus)\n");
             Response resp = {
                 .packet_id = user_conn->notifyID,
                 .opcode = 0,
@@ -488,7 +477,6 @@ Protocol protocols[] = {
     PROTOCOL("notify", notifyProtocolFuncs),
 };
 void coreGetProtocols(Client* client, Request* header) {
-    fprintf(stderr, "GetProtocols\n");
     for(size_t i = 0; i < ARRAY_LEN(protocols); ++i) {
         Response res_header;
         res_header.packet_id = header->packet_id;
@@ -511,8 +499,6 @@ void coreGetProtocols(Client* client, Request* header) {
 }
 
 void authAuthenticate(Client* client, Request* header){
-    fprintf(stderr, "Authenticate\n");
-
     // TODO: send some error here:
     if(header->packet_len != KYBER_PUBLICKEYBYTES) return;
     uint8_t* pk = calloc(KYBER_PUBLICKEYBYTES, 1);
@@ -528,10 +514,10 @@ void authAuthenticate(Client* client, Request* header){
     }
 
     if(userID == ~0u){
-        fprintf(stderr, "Couldn't find user\n");
+        error("%d: Couldn't find user", client->fd);
         return;
     }else if (userID < USERS_COUNT){
-        fprintf(stderr, "Someone is trying to log in as %s\n", users[userID].username);
+        info("%d: Someone is trying to log in as %s", client->fd, users[userID].username);
     }
 
     #define RAND_COUNT 16
@@ -586,7 +572,7 @@ void authAuthenticate(Client* client, Request* header){
     // TODO: mutex this sheizung
     list_remove(&client->list);
     list_insert(&users[client->userID].clients, &client->list);
-    fprintf(stderr, "Welcome %s!\n", users[client->userID].username);
+    info("%d: Welcome %s!", client->fd, users[client->userID].username);
     Response res_header;
     res_header.packet_id = header->packet_id;
     res_header.opcode = 0;
@@ -612,7 +598,7 @@ void client_thread(void* fd_void) {
         if(n == 0) break;
         request_ntoh(&req_header);
         if(req_header.protocol_id >= ARRAY_LEN(protocols)) {
-            fprintf(stderr, "%d: Invalid protocol_id: %u\n", client.fd, req_header.protocol_id);
+            error("%d: Invalid protocol_id: %u", client.fd, req_header.protocol_id);
             res_header.packet_id = req_header.packet_id;
             res_header.opcode = -ERROR_INVALID_PROTOCOL_ID;
             res_header.packet_len = 0;
@@ -623,7 +609,7 @@ void client_thread(void* fd_void) {
         }
         Protocol* proto = &protocols[req_header.protocol_id];
         if(req_header.func_id >= proto->funcs_count) {
-            fprintf(stderr, "%d: Invalid func_id: %u\n",  client.fd, req_header.func_id);
+            error("%d: Invalid func_id: %u",  client.fd, req_header.func_id);
             res_header.packet_id = req_header.packet_id;
             res_header.opcode = -ERROR_INVALID_FUNC_ID;
             res_header.packet_len = 0;
@@ -634,7 +620,7 @@ void client_thread(void* fd_void) {
         }
 
         if (client.userID == (uint32_t)-1 && req_header.protocol_id >= 2){
-            fprintf(stderr, "%d: Not Authenticated\n", client.fd);
+            error("%d: Not Authenticated", client.fd);
             res_header.packet_id = req_header.packet_id;
             res_header.opcode = -ERROR_NOT_AUTH;
             res_header.packet_len = 0;
@@ -644,13 +630,13 @@ void client_thread(void* fd_void) {
             continue;
         }
 
-        fprintf(stderr, "INFO: %d: %s func_id=%d\n", client.fd, proto->name, req_header.func_id);
+        info("%d: %s func_id=%d", client.fd, proto->name, req_header.func_id);
         proto->funcs[req_header.func_id](&client, &req_header);
     }
     list_remove(&client.list);
     closesocket(client.fd);
     free(client.pb.items);
-    fprintf(stderr, "Disconnected!\n");
+    info("%d: Disconnected!", client.fd);
 }
 #define PORT 6969
 int main(void) {
@@ -662,14 +648,14 @@ int main(void) {
     size_t pk_size = 0;
     users[USER_F1L1P].pk = (uint8_t*)read_entire_file("./f1l1p.pub", &pk_size);
     if(pk_size != KYBER_PUBLICKEYBYTES || users[USER_F1L1P].pk == NULL){
-        fprintf(stderr, "Provide valid public key!\n");
+        fatal("Provide valid public key!");
         return 1;
     }
 
     pk_size = 0;
     users[USER_DCRAFTBG].pk = (uint8_t*)read_entire_file("./dcraftbg.pub", &pk_size);
     if(pk_size != KYBER_PUBLICKEYBYTES || users[USER_DCRAFTBG].pk == NULL){
-        fprintf(stderr, "Provide valid public key!\n");
+        fatal( "Provide valid public key!");
         return 1;
     }
 
