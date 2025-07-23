@@ -244,6 +244,7 @@ void render_messages(UIBox box, Messages* msgs) {
         size_t y_offset_offset_start = 0;
         size_t x_offset_start = 0;
         while(*prefix_cursor) {
+            if((y_offset_start + (int32_t)y_offset_offset_start) < 0) break;
             if(x_offset_start >= box_width) {
                 x_offset_start = 0;
                 y_offset_offset_start++;
@@ -252,14 +253,14 @@ void render_messages(UIBox box, Messages* msgs) {
             x_offset_start++;
             prefix_cursor++;
         }
+        if(y_offset_start < 0) break;
         for(size_t j = y_offset_offset_start; j < msg_lines; ++j, content_cursor += box_width - x_offset_start) {
-            if(y_offset_start + (int32_t)j < 0) continue;
+            if((y_offset_start + (int32_t)j) < 0) continue;
             for(size_t x_offset = 0; x_offset < box_width - x_offset_start && content_cursor + x_offset < content_end; ++x_offset) {
                 stui_putchar(box.l + x_offset_start + x_offset, box.t + y_offset_start + (int32_t)j, content_cursor[x_offset]);
             }
             x_offset_start = 0;
         }
-        if(y_offset_start < 0) break;
     }
 }
 
