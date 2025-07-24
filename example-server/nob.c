@@ -142,6 +142,7 @@ int main(int argc, char** argv) {
     }
 
     da_append(&objs, temp_sprintf("%s/vendor.o", bindir));
+    da_append(&objs, temp_sprintf("%s/sqlite3.o", bindir));
     const char* exe = temp_sprintf("%s/example-server/example-server" EXE_SUFFIX, bindir);
 
     if(needs_rebuild(exe, objs.items, objs.count)) {

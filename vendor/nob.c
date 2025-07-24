@@ -30,7 +30,15 @@ int main(int argc, char** argv) {
         // TODO: Gradma delete your build and fix the sse in GT
         cmd_append(&cmd, "-mno-sse", "-mno-sse2");
 #endif
-        return cmd_run_sync_and_reset(&cmd) ? 0 : 1;
+        if(!cmd_run_sync_and_reset(&cmd)) return 1;
+    }
+    
+    const char* sqlite_obj = temp_sprintf("%s/sqlite3.o", bindir);
+    const char* sqlite_src = "sqlite3/sqlite3.c";
+    if(nob_c_needs_rebuild1(&stb, &pathb, sqlite_obj, sqlite_src)){
+        cmd_append(&cmd, cc, "-O2", "-MMD", "-g", "-c", sqlite_src, "-o", sqlite_obj);
+
+        if(!cmd_run_sync_and_reset(&cmd)) return 1;
     }
     return 0;
 }
