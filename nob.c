@@ -51,9 +51,17 @@ int main(int argc, char** argv) {
         EXAMPLE_KEYGEN,
     } example = EXAMPLE_ALL;
     bool run = false;
+    bool capturing_args = false;
+
+    File_Paths run_args = { 0 };
     while(argc) {
         const char* arg = shift_args(&argc, &argv);
-        if(strcmp(arg, "example-client") == 0) example = EXAMPLE_CLIENT;
+        if(capturing_args) {
+            da_append(&run_args, arg);
+            continue;
+        }
+        if(strcmp(arg, "--") == 0) capturing_args = true;
+        else if(strcmp(arg, "example-client") == 0) example = EXAMPLE_CLIENT;
         else if(strcmp(arg, "example-server") == 0) example = EXAMPLE_SERVER;
         else if(strcmp(arg, "example-keygen") == 0) example = EXAMPLE_KEYGEN;
         else if(strcmp(arg, "run") == 0) run = true;
@@ -92,6 +100,7 @@ int main(int argc, char** argv) {
             cmd_append(&cmd, "./.build/example-server/example-server"EXE_SUFFIX);
             break;
         }
+        da_append_many(&cmd, run_args.items, run_args.count);
         return cmd_run_sync_and_reset(&cmd) ? 0 : 1;
     }
     return 0;
