@@ -7,6 +7,7 @@
 #include <list_head.h>
 #include "darray.h"
 #include "post_quantum_cryptography.h"
+#include "sqlite3/sqlite3.h"
 #include "fileutils.h"
 
 #define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
@@ -23,7 +24,7 @@
 #define fatal(...) log(FATAL, __VA_ARGS__)
 #define ALIGN16(n) (((n) + 15) & ~15)
 
-
+sqlite3* sqlite_database;
 
 typedef struct {
     uint8_t* items;
@@ -638,9 +639,46 @@ void client_thread(void* fd_void) {
     free(client.pb.items);
     info("%d: Disconnected!", client.fd);
 }
+
 #define PORT 6969
+
+static int sqlite_callback(void* data, int argc, char** argv, char** azColName) {
+    (void)data;
+    for(int i = 0; i < argc; i++){
+        printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
+    }
+    return 0;
+}
+
+void execute_sql(sqlite3* db, const char* sql){
+    char* err_msg = NULL;
+
+    int rc = sqlite3_exec(
+        db,
+        sql,
+        sqlite_callback,
+        0,
+        &err_msg
+    );
+
+    if(rc != SQLITE_OK){
+        fprintf(stderr, "SQL error: %s\n", err_msg);
+        sqlite3_free(err_msg);
+    }
+}
+
 int main(void) {
     gtinit();
+
+    if (sqlite3_open("database.db",&sqlite_database) != SQLITE_OK){ 
+        fprintf(stderr, "Couldn't open database");
+        return 1;
+    }
+
+    //preparing db!
+    execute_sql(sqlite_database, "create table if not exists public_keys(key blob, user_id INTEGER, PRIMARY KEY(key), FOREIGN KEY(user_id) REFERENCES users(id));");
+    execute_sql(sqlite_database, "create table if not exists users(user_id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT, username text);");
+
     users[USER_F1L1P].username = "f1l1p";
     users[USER_DCRAFTBG].username = "dcraftbg";
 
@@ -695,5 +733,6 @@ int main(void) {
     }
     (void)server;
     closesocket(server);
+    sqlite3_close(sqlite_database);
     return 0;
 }

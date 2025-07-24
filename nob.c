@@ -26,7 +26,7 @@ static bool go_run_nob_inside(Nob_Cmd* cmd, const char* dir) {
 }
 
 void help(FILE* sink, const char* exe) {
-    fprintf(sink, "%s (example-client|example-server|example-keygen (run)) \n", exe);
+    fprintf(sink, "%s (example-client|example-server|example-keygen|example-server-utils (run)) \n", exe);
 }
 int main(int argc, char** argv) {
     NOB_GO_REBUILD_URSELF(argc, argv);
@@ -49,6 +49,7 @@ int main(int argc, char** argv) {
         EXAMPLE_CLIENT,
         EXAMPLE_SERVER,
         EXAMPLE_KEYGEN,
+        EXAMPLE_SERVER_UTILS,
     } example = EXAMPLE_ALL;
     bool run = false;
     bool capturing_args = false;
@@ -64,6 +65,7 @@ int main(int argc, char** argv) {
         else if(strcmp(arg, "example-client") == 0) example = EXAMPLE_CLIENT;
         else if(strcmp(arg, "example-server") == 0) example = EXAMPLE_SERVER;
         else if(strcmp(arg, "example-keygen") == 0) example = EXAMPLE_KEYGEN;
+        else if(strcmp(arg, "example-server-utils") == 0) example = EXAMPLE_SERVER_UTILS;
         else if(strcmp(arg, "run") == 0) run = true;
         else {
             nob_log(NOB_ERROR, "Unexpected argument: `%s`", arg);
@@ -78,10 +80,14 @@ int main(int argc, char** argv) {
     case EXAMPLE_ALL:
         if(!go_run_nob_inside(&cmd, "example-client")) return 1;
         if(!go_run_nob_inside(&cmd, "example-server")) return 1;
+        if(!go_run_nob_inside(&cmd, "example-server-utils")) return 1;
         if(!go_run_nob_inside(&cmd, "example-keygen")) return 1;
         break;
     case EXAMPLE_SERVER:
         if(!go_run_nob_inside(&cmd, "example-server")) return 1;
+        break;
+    case EXAMPLE_SERVER_UTILS:
+        if(!go_run_nob_inside(&cmd, "example-server-utils")) return 1;
         break;
     case EXAMPLE_CLIENT:
         if(!go_run_nob_inside(&cmd, "example-client")) return 1;
@@ -98,6 +104,9 @@ int main(int argc, char** argv) {
             break;
         case EXAMPLE_SERVER:
             cmd_append(&cmd, "./.build/example-server/example-server"EXE_SUFFIX);
+            break;
+        case EXAMPLE_SERVER_UTILS:
+            cmd_append(&cmd, "./.build/example-server-utils/example-server-utils"EXE_SUFFIX);
             break;
         case EXAMPLE_KEYGEN:
             cmd_append(&cmd, "./.build/example-keygen/example-keygen"EXE_SUFFIX);
