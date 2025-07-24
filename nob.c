@@ -99,6 +99,9 @@ int main(int argc, char** argv) {
         case EXAMPLE_SERVER:
             cmd_append(&cmd, "./.build/example-server/example-server"EXE_SUFFIX);
             break;
+        case EXAMPLE_KEYGEN:
+            cmd_append(&cmd, "./.build/example-keygen/example-keygen"EXE_SUFFIX);
+            break;
         }
         da_append_many(&cmd, run_args.items, run_args.count);
         return cmd_run_sync_and_reset(&cmd) ? 0 : 1;
