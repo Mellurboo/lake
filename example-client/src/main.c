@@ -399,6 +399,29 @@ size_t term_width, term_height;
 StringBuilder prompt = { 0 };
 bool tab_list = false;
 uint16_t tab_list_selection = 0;
+
+enum {
+    TAB_CATEGORY_DMS,
+    TAB_CATEGORY_GROUP_CHATS,
+    TAB_CATEGORY_SERVERS,
+    TAB_CATEGORIES_COUNT
+};
+static_assert(TAB_CATEGORIES_COUNT == 3);
+const char* tab_category_labels[] = {
+    [TAB_CATEGORY_DMS] = "DMS",
+    [TAB_CATEGORY_GROUP_CHATS] = "Group Chats",
+    [TAB_CATEGORY_SERVERS] = "Servers",
+};
+
+enum {
+    TAB_LIST_STATE_CATEGORY,
+    TAB_LIST_STATE_DMS,
+} tab_list_state = TAB_LIST_STATE_CATEGORY;
+typedef struct {
+    const char** items;
+    size_t len, cap;
+} TabLabels;
+TabLabels tab_labels = { 0 };
 void redraw(void) {
     for(size_t y = 0; y < term_height; ++y) {
         for(size_t x = 0; x < term_width; ++x) {
@@ -410,8 +433,38 @@ void redraw(void) {
     };
     UIBox tab_list_box;
     if(tab_list) {
+        tab_labels.len = 0;
         tab_list_box = uibox_chop_left(&term_box, (term_box.r - term_box.l) * 14 / 100);
         uibox_draw_border(tab_list_box, '=', '|', '+');
+        switch(tab_list_state) {
+        case TAB_LIST_STATE_CATEGORY:
+            for(size_t i = 0; i < TAB_CATEGORIES_COUNT; ++i) {
+                da_push(&tab_labels, tab_category_labels[i]);
+            }
+            break;
+        case TAB_LIST_STATE_DMS:
+            da_push(&tab_labels, "f1l1p");
+            da_push(&tab_labels, "bogus");
+            da_push(&tab_labels, "amogus");
+            break;
+        }
+        UIBox tab_list_inner = uibox_inner(tab_list_box);
+        for(size_t i = 0; i < tab_labels.len; ++i) {
+            if(tab_list_inner.t + i > tab_list_inner.b) break;
+            const char* label = tab_labels.items[i];
+            size_t dx = 0;
+            uint32_t fg = 0;
+            if(tab_list_selection == i) {
+                fg = STUI_RGB(0x00ffff);
+                stui_putchar_color(tab_list_inner.l + dx++, tab_list_inner.t + i, '>', fg, 0);
+                stui_putchar_color(tab_list_inner.l + dx++, tab_list_inner.t + i, ' ', fg, 0);
+            }
+            while(*label) {
+                if(tab_list_inner.l + dx > tab_list_inner.r) break;
+                stui_putchar_color(tab_list_inner.l + dx++, tab_list_inner.t + i, *label, fg, 0);
+                label++;
+            }
+        }
     }
     UIBox input_box = uibox_chop_bottom(&term_box, 1);
     uibox_draw_border(term_box, '=', '|', '+');
@@ -734,9 +787,37 @@ int main(int argc, const char** argv) {
         gtblockfd(fileno(stdin), GTBLOCKIN);
         int c = getchar();
         if(tab_list) {
-            switch(c) {
-            case '\t':
+            if(c == '\t') {
                 tab_list = !tab_list;
+                continue;
+            }
+            switch(tab_list_state) {
+            case TAB_LIST_STATE_CATEGORY:
+                switch(c) {
+                case 'D':
+                case 'd':
+                    tab_list_selection = TAB_CATEGORY_DMS;
+                    break;
+                case 'G':
+                case 'g':
+                    tab_list_selection = TAB_CATEGORY_GROUP_CHATS;
+                    break;
+                case 'S':
+                case 's':
+                    tab_list_selection = TAB_CATEGORY_SERVERS;
+                    break;
+                case '\n':
+                    if(tab_list_selection == 0) tab_list_state = TAB_LIST_STATE_DMS;
+                    break;
+                }
+                break;
+            case TAB_LIST_STATE_DMS:
+                switch(c) {
+                case 'b':
+                case 'B':
+                    tab_list_state = TAB_LIST_STATE_CATEGORY;
+                    break;
+                }
                 break;
             }
         } else {
