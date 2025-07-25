@@ -25,6 +25,7 @@
 #define fatal(...) log(FATAL, __VA_ARGS__)
 #define ALIGN16(n) (((n) + 15) & ~15)
 
+DbContext* db = NULL;
 
 typedef struct {
     uint8_t* items;
@@ -174,16 +175,6 @@ void response_hton(Response* res) {
 }
 
 typedef uint64_t userID;
-typedef struct {
-    size_t content_len;
-    char* content;
-    uint64_t milis;
-    uint32_t author;
-} Message;
-typedef struct {
-    Message* items;
-    size_t len, cap;
-} Messages;
 
 typedef struct {
     uint32_t* items;
@@ -352,14 +343,24 @@ void sendMsg(Client* client, Request* header) {
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read;
     // TODO: utf8 and isgraphic verifications
-    Channel* channel = get_or_insert_channel(packet.server_id, packet.channel_id, client->userID);
     Message message = {
         .content_len = msg_len,
         .content = msg,
         .milis = time_unix_milis(),
         .author = client->userID,
     };
-    da_push(&channel->msgs, message);
+    int e = DbContext_send_msg(db, packet.server_id, packet.channel_id, client->userID, message.content, message.content_len, message.milis);
+    //TODO: send some error here:
+    if(e < 0) return;
+
+    if(packet.server_id == 0){
+        //TODO: notifications       
+    }else{
+        //TODO: we assert its DMs
+        assert(false && "TODO: everything other than DMs");
+    }
+
+    /*
     for(size_t i = 0; i < channel->participants.len; ++i) {
         uint32_t id = channel->participants.items[i];
         User* user = &users[id];
@@ -388,6 +389,7 @@ void sendMsg(Client* client, Request* header) {
             pbflush(&user_conn->pb, user_conn);
         }
     }
+    */
     Response resp = {
         .packet_id = header->packet_id,
         .opcode = 0,
@@ -411,29 +413,35 @@ void getMsgsBefore(Client* client, Request* header) {
     if(n < 0 || n == 0) goto err_read0;
     messagesBeforePacket_ntoh(&packet);
     uint64_t milis = (((uint64_t)packet.milis_high) << 32) | (uint64_t)packet.milis_low;
-    Channel* channel = get_or_insert_channel(packet.server_id, packet.channel_id, client->userID);
-    for(size_t i = channel->msgs.len; i > 0 && packet.count > 0; --i) {
-        Message* msg = &channel->msgs.items[i - 1];
-        if(msg->milis < milis) {
-            Response resp = {
-                .packet_id = header->packet_id,
-                .opcode = 0,
-                .packet_len = msg->content_len + sizeof(MessagesBeforeResponse),
-            };
-            MessagesBeforeResponse msg_resp = {
-                .author_id = msg->author,
-                .milis_low = msg->milis,
-                .milis_high = msg->milis >> 32,
-            };
-            response_hton(&resp);
-            messagesBeforeResponse_hton(&msg_resp);
-            pbwrite(&client->pb, &resp, sizeof(resp));
-            pbwrite(&client->pb, &msg_resp, sizeof(msg_resp));
-            pbwrite(&client->pb, msg->content, msg->content_len);
-            pbflush(&client->pb, client);
-            packet.count--;
-        }
+
+    Messages msgs = {0};
+    int e = DbContext_get_msgs_before(db, packet.server_id, packet.channel_id, client->userID, milis, &msgs);
+    //TODO: send some error here:
+    if(e < 0) goto finish;
+
+    for(size_t i = msgs.len; i > 0; --i) {
+        Message* msg = &msgs.items[i - 1];
+        Response resp = {
+            .packet_id = header->packet_id,
+            .opcode = 0,
+            .packet_len = msg->content_len + sizeof(MessagesBeforeResponse),
+        };
+        MessagesBeforeResponse msg_resp = {
+            .author_id = msg->author,
+            .milis_low = msg->milis,
+            .milis_high = msg->milis >> 32,
+        };
+        response_hton(&resp);
+        messagesBeforeResponse_hton(&msg_resp);
+        pbwrite(&client->pb, &resp, sizeof(resp));
+        pbwrite(&client->pb, &msg_resp, sizeof(msg_resp));
+        pbwrite(&client->pb, msg->content, msg->content_len);
+        pbflush(&client->pb, client);
+
+        free(msg->content);
     } 
+finish:
+    {} // apparently labels cannot be near declarations so this is lil hack
     Response resp = {
         .packet_id = header->packet_id,
         .opcode = 0,
@@ -645,7 +653,6 @@ void client_thread(void* fd_void) {
 int main(void) {
     gtinit();
 
-    DbContext* db = NULL;
 
     if(DbContext_init(&db) < 0){
         error("Couldn't initialize database context\n");
