@@ -216,8 +216,22 @@ typedef struct {
 typedef struct {
     uint16_t l, t, r, b;
 } UIBox;
-inline UIBox content_box(size_t term_width, size_t term_height) {
-    return (UIBox) { .l = 1, .t = 1, .r = term_width - 1, .b = term_height - 1 };
+void uibox_draw_border(UIBox box, int tb, int lr, int corner) {
+    stui_window_border(box.l, box.t, box.r - box.l, box.b - box.t, tb, lr, corner);
+}
+// The box that represents the content that would go within the border
+inline UIBox uibox_inner(UIBox box) {
+    return (UIBox){box.l + 1, box.t + 1, box.r - 1, box.b - 1};
+}
+inline UIBox uibox_chop_left(UIBox* box, uint16_t n) {
+    uint16_t l = box->l;
+    box->l += n;
+    return (UIBox){l, box->t, box->l, box->b };
+}
+inline UIBox uibox_chop_bottom(UIBox* box, uint16_t n) {
+    uint16_t b = box->b;
+    box->b -= n;
+    return (UIBox){box->l, box->b, box->r, b };
 }
 
 
@@ -227,7 +241,7 @@ typedef struct {
 } Messages;
 void render_messages(UIBox box, Messages* msgs) {
     size_t box_width = box.r - box.l;
-    int32_t y_offset_start = box.b - box.t - 1;
+    int32_t y_offset_start = box.b - box.t + 1;
     for(size_t i = msgs->len; i > 0; --i) {
         Message* msg = &msgs->items[i-1];
 
@@ -383,33 +397,45 @@ void onNotification(Client* client, Response* response, IncomingEvent* event) {
 Messages msgs;
 size_t term_width, term_height;
 StringBuilder prompt = { 0 };
+bool tab_list = false;
 void redraw(void) {
     for(size_t y = 0; y < term_height; ++y) {
         for(size_t x = 0; x < term_width; ++x) {
             stui_putchar(x, y, ' ');
         }
     }
-    stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
+    UIBox term_box = {
+        0, 0, term_width - 1, term_height - 1
+    };
+    if(tab_list) {
+        UIBox tab_list = uibox_chop_left(&term_box, (term_box.r - term_box.l) * 14 / 100);
+        uibox_draw_border(tab_list, '=', '|', '+');
+    }
+    (void)tab_list;
+    UIBox input_box = uibox_chop_bottom(&term_box, 1);
+    uibox_draw_border(term_box, '=', '|', '+');
+    // stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
     char buf[128];
     snprintf(buf, sizeof(buf), "DMs: %s", dming < ARRAY_LEN(author_names) ? author_names[dming] : "UNKNOWN");
     {
         char* str = buf;
-        size_t x = 2;
+        size_t x = term_box.l + 2;
         while(*str) stui_putchar(x++, 0, *str++);
     }
-    render_messages(content_box(term_width, term_height), &msgs);
-    stui_putchar(0, term_height - 1, '>');
-    stui_putchar(1, term_height - 1, ' ');
-    size_t x = 2;
-    for(size_t i = 2; i < term_width - 1; ++i) {
+
+    render_messages(uibox_inner(term_box), &msgs);
+    stui_putchar(input_box.l + 0, term_height - 1, '>');
+    stui_putchar(input_box.l + 1, term_height - 1, ' ');
+    for(size_t i = input_box.l + input_box.l + 2; i < term_width - 1; ++i) {
         stui_putchar(i, term_height - 1, ' ');
     }
-    for(; x < prompt.len + 2; ++x) {
-        if(x > term_width - 1) continue;
-        stui_putchar(0 + x, term_height - 1, prompt.items[x - 2]);
+    size_t i = 0;
+    for(; i < prompt.len; ++i) {
+        if(input_box.l + 2 + i >= input_box.r) continue;
+        stui_putchar(input_box.l + 2 + i, input_box.b, prompt.items[i]);
     }
     stui_refresh();
-    stui_goto(x, term_height - 1);
+    stui_goto(input_box.l + 2 + i, input_box.b);
 }
 const char* shift_args(int *argc, const char ***argv) {
     if((*argc) <= 0) return NULL;
@@ -709,6 +735,9 @@ int main(int argc, const char** argv) {
         case '\b':
         case 127:
             if(prompt.len) prompt.len--;
+            break;
+        case '\t':
+            tab_list = !tab_list;
             break;
         case '\n': {
             // FIXME: sending empty message causes it to go bogus amogus
