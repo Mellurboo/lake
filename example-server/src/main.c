@@ -174,64 +174,6 @@ void response_hton(Response* res) {
     res->packet_len = htonl(res->packet_len);
 }
 
-typedef uint64_t userID;
-
-typedef struct {
-    uint32_t* items;
-    size_t len, cap;
-} UserIds;
-typedef struct {
-    Messages msgs;
-    UserIds participants;
-} Channel;
-typedef struct {
-    Channel channel;
-    uint32_t max_user_id;
-} DM;
-typedef struct {
-    DM* items;
-    size_t len, cap;
-} DMs;
-typedef struct {
-    const char* username;
-    DMs dms;
-    uint8_t* pk;
-    // TODO: Mutex this bullsheizung if we do threading
-    // List of active connections
-    // on that thinger
-    struct list_head clients;
-} User;
-
-enum {
-    USER_F1L1P,
-    USER_DCRAFTBG,
-    USERS_COUNT
-};
-static User users[USERS_COUNT] = { 0 };
-static DM* get_or_insert_dm(User* user, uint32_t min_user_id, uint32_t max_user_id) {
-    for(size_t i = 0; i < user->dms.len; ++i) {
-        DM* dm = &user->dms.items[i];
-        if(dm->max_user_id == max_user_id) return dm;
-    }
-    da_push(&user->dms, ((DM){0}));
-    DM* dm = &user->dms.items[user->dms.len-1];
-    da_push(&dm->channel.participants, min_user_id);
-    da_push(&dm->channel.participants, max_user_id);
-    dm->max_user_id = max_user_id;
-    return dm;
-}
-// TODO: make this failable and return an error (int)
-static Channel* get_or_insert_channel(uint32_t server_id, uint32_t channel_id, uint32_t author_id) {
-    if(server_id == 0) {
-        // TODO: we assert the channel is a valid user ID
-        assert(channel_id < USERS_COUNT);
-        size_t max_user_id = author_id < channel_id ? channel_id : author_id;
-        size_t min_user_id = author_id < channel_id ? author_id : channel_id;
-        return &get_or_insert_dm(&users[min_user_id], min_user_id, max_user_id)->channel;
-    }
-    // TODO: we assert its DMs
-    assert(false && "To be done: everything other than DMs");
-}
 enum {
     ERROR_INVALID_PROTOCOL_ID = 1,
     ERROR_INVALID_FUNC_ID,
@@ -324,6 +266,76 @@ void notification_hton(Notification* packet) {
     packet->milis_high = htonl(packet->milis_high);
 }
 #define MAX_MESSAGE 10000
+typedef struct UserMapBucket UserMapBucket;
+struct UserMapBucket {
+    UserMapBucket* next;
+    uint32_t user_id;
+    struct list_head clients;
+};
+typedef struct {
+    struct {
+        UserMapBucket** items;
+        size_t len;
+    } buckets;
+    size_t len;
+} UserMap;
+bool user_map_reserve(UserMap* map, size_t extra) {
+    if(map->len + extra > map->buckets.len) {
+        size_t ncap = map->buckets.len*2 + extra;
+        UserMapBucket** newbuckets = malloc(sizeof(*newbuckets)*ncap);
+        if(!newbuckets) return false;
+        memset(newbuckets, 0, sizeof(*newbuckets) * ncap);
+        for(size_t i = 0; i < map->buckets.len; ++i) {
+            UserMapBucket* oldbucket = map->buckets.items[i];
+            while(oldbucket) {
+                UserMapBucket* next = oldbucket->next;
+                size_t hash = ((size_t)oldbucket->user_id) % ncap;
+                UserMapBucket* newbucket = newbuckets[hash];
+                oldbucket->next = newbucket;
+                newbuckets[hash] = oldbucket;
+                oldbucket = next;
+            }
+        }
+        free(map->buckets.items);
+        map->buckets.items = newbuckets;
+        map->buckets.len = ncap;
+    }
+    return true;
+}
+UserMapBucket* user_map_insert(UserMap* map, uint32_t user_id) {
+    if(!user_map_reserve(map, 1)) return NULL;
+    size_t hash = ((size_t)user_id) % map->buckets.len;
+    UserMapBucket* into = map->buckets.items[hash];
+    UserMapBucket* bucket = calloc(sizeof(UserMapBucket), 1);
+    if(!bucket) return NULL;
+    bucket->next = into;
+    bucket->user_id = user_id;
+    list_init(&bucket->clients);
+    map->buckets.items[hash] = bucket;
+    map->len++;
+    return bucket;
+}
+UserMapBucket* user_map_get(UserMap* map, uint32_t user_id) {
+    if(map->len == 0) return NULL;
+    assert(map->buckets.len > 0);
+    size_t hash = ((size_t)user_id) % map->buckets.len;
+    UserMapBucket* bucket = map->buckets.items[hash];
+    while(bucket) {
+        if(bucket->user_id == user_id) return bucket;
+        bucket = bucket->next;
+    }
+    return NULL;
+}
+UserMapBucket* user_map_get_or_insert(UserMap* map, uint32_t user_id) {
+    UserMapBucket* bucket = user_map_get(map, user_id);
+    if(bucket) return bucket;
+    return user_map_insert(map, user_id);
+}
+static UserMap user_map = { 0 };
+typedef struct {
+    uint32_t *items;
+    size_t len, cap;
+} Participants;
 void sendMsg(Client* client, Request* header) {
     // NOTE: we hard assert its MORE because you need at least 1 character per message
     // TODO: send some error here:
@@ -353,13 +365,44 @@ void sendMsg(Client* client, Request* header) {
     //TODO: send some error here:
     if(e < 0) return;
 
+    Participants participants = { 0 };
     if(packet.server_id == 0){
+        da_push(&participants, client->userID);
+        da_push(&participants, packet.channel_id);
         //TODO: notifications       
     }else{
         //TODO: we assert its DMs
         assert(false && "TODO: everything other than DMs");
     }
-
+    for(size_t i = 0; i < participants.len; ++i) {
+        UserMapBucket* user = user_map_get(&user_map, participants.items[i]);
+        if(!user) continue;
+        list_foreach(user_conn_list, &user->clients) {
+            Client* user_conn = (Client*)user_conn_list;
+            if(user_conn->notifyID == ~0u) continue;
+            if(user_conn == client) continue;
+            Response resp = {
+                .packet_id = user_conn->notifyID,
+                .opcode = 0,
+                .packet_len = sizeof(Notification) + msg_len
+            };
+            response_hton(&resp);
+            Notification notif = {
+                .server_id = packet.server_id,
+                .channel_id = packet.server_id == 0 ? participants.items[(i + 1) % 2] : packet.channel_id,
+                .author_id = message.author,
+                .milis_low = message.milis,
+                .milis_high = message.milis >> 32,
+            };
+            notification_hton(&notif);
+            // TODO: don't block here? And/or spawn a gt thread for each user we're notifying
+            pbwrite(&user_conn->pb, &resp, sizeof(Response));
+            pbwrite(&user_conn->pb, &notif, sizeof(Notification));
+            pbwrite(&user_conn->pb, msg, msg_len);
+            pbflush(&user_conn->pb, user_conn);
+        }
+    }
+    free(participants.items);
     /*
     for(size_t i = 0; i < channel->participants.len; ++i) {
         uint32_t id = channel->participants.items[i];
@@ -507,6 +550,7 @@ void coreGetProtocols(Client* client, Request* header) {
     pbflush(&client->pb, client);
 }
 
+// FIXME: all these fucking memory leaks :(((
 void authAuthenticate(Client* client, Request* header){
     // TODO: send some error here:
     if(header->packet_len != KYBER_PUBLICKEYBYTES) return;
@@ -514,28 +558,19 @@ void authAuthenticate(Client* client, Request* header){
     client_read_(client, pk, KYBER_PUBLICKEYBYTES);
 
     uint32_t userID = ~0u;
-    for(size_t i = 0; i < USERS_COUNT; i++){
-        if(memcmp(pk, users[i].pk, KYBER_PUBLICKEYBYTES) == 0){
-            free(pk);
-            userID = i;
-            break;
-        }
-    }
-
-    if(userID == ~0u){
+    int e = DbContext_get_user_id_from_pub_key(db, pk, &userID);
+    if(e < 0) {
         error("%d: Couldn't find user", client->fd);
         return;
-    }else if (userID < USERS_COUNT){
-        info("%d: Someone is trying to log in as %s", client->fd, users[userID].username);
-    }
-
+    } 
+    info("%d: Someone is trying to log in as %d", client->fd, userID);
     #define RAND_COUNT 16
     uint8_t* ct = calloc(KYBER_CIPHERTEXTBYTES + RAND_COUNT, 1);
 
     uint8_t* ss = calloc(KYBER_SSBYTES, 1);
     
     
-    crypto_kem_enc(ct, ss, users[userID].pk);
+    crypto_kem_enc(ct, ss, pk);
 
     AES_init_ctx(&client->aes_ctx, ss);
     free(ss);
@@ -575,13 +610,13 @@ void authAuthenticate(Client* client, Request* header){
     free(randBytes);
     free(userRandBytes);
 
-    // TODO: send some error here:
-    if(userID >= USERS_COUNT) return;
     client->userID = userID;
+
+    UserMapBucket* user = user_map_get_or_insert(&user_map, userID);
     // TODO: mutex this sheizung
     list_remove(&client->list);
-    list_insert(&users[client->userID].clients, &client->list);
-    info("%d: Welcome %s!", client->fd, users[client->userID].username);
+    list_insert(&user->clients, &client->list);
+    info("%d: Welcome %d!", client->fd, userID);
     Response res_header;
     res_header.packet_id = header->packet_id;
     res_header.opcode = 0;
@@ -659,14 +694,6 @@ int main(void) {
         return 1;
     }
 
-    //TODO: unhardcode users make them actually dynamic
-    DbContext_get_pub_key_from_user_id(db, 1, &users[USER_F1L1P].pk);
-    DbContext_get_pub_key_from_user_id(db, 2, &users[USER_DCRAFTBG].pk);
-    DbContext_get_username_from_user_id(db, 1, (char**)&users[USER_F1L1P].username);
-    DbContext_get_username_from_user_id(db, 2, (char**)&users[USER_DCRAFTBG].username);
-
-    list_init(&users[USER_F1L1P].clients);
-    list_init(&users[USER_DCRAFTBG].clients);
     int server = socket(AF_INET, SOCK_STREAM, 0);
     if(server < 0) {
         fatal("Could not create server socket: %s", sneterr());
