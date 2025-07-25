@@ -9,6 +9,7 @@
 #include "post_quantum_cryptography.h"
 #include "sqlite3/sqlite3.h"
 #include "fileutils.h"
+#include "db_context.h"
 
 #define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 #ifdef _WIN32
@@ -641,101 +642,10 @@ void client_thread(void* fd_void) {
 
 #define PORT 6969
 
-static int sqlite_callback(void* data, int argc, char** argv, char** azColName) {
-    (void)data;
-    for(int i = 0; i < argc; i++){
-        printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
-    }
-    return 0;
-}
-
-void execute_sql(sqlite3* db, const char* sql){
-    char* err_msg = NULL;
-
-    int rc = sqlite3_exec(
-        db,
-        sql,
-        sqlite_callback,
-        0,
-        &err_msg
-    );
-
-    if(rc != SQLITE_OK){
-        fprintf(stderr, "SQL error: %s\n", err_msg);
-        sqlite3_free(err_msg);
-    }
-}
-
-typedef struct{
-    sqlite3* db;
-} DbContext;
-
-int DbContext_init(DbContext* db){
-   int e = sqlite3_open("database.db",&db->db);
-
-   execute_sql(db->db, "create table if not exists public_keys(key blob, user_id INTEGER, PRIMARY KEY(key), FOREIGN KEY(user_id) REFERENCES users(id));");
-   execute_sql(db->db, "create table if not exists users(user_id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT, username text);");
-
-   return e == SQLITE_OK ? 0 : -1;
-}
-
-int dbcontext_get_user_id_from_pub_key(DbContext* db, uint8_t* pk, uint32_t* user_id){
-    sqlite3_stmt *stmt;
-    int e = sqlite3_prepare_v2(db->db, "select user_id from public_keys where key = ?", -1, &stmt, NULL);
-    if(e != SQLITE_OK) return -1;
-
-    e = sqlite3_bind_blob(stmt, 1, pk, KYBER_PUBLICKEYBYTES, SQLITE_STATIC);
-    if(e != SQLITE_OK) return -1;
-
-    if(sqlite3_step(stmt) == SQLITE_ROW) {
-        *user_id = sqlite3_column_int(stmt, 0);
-    }
-
-    sqlite3_finalize(stmt);
-    return 0;
-}
-
-int DbContext_get_pub_key_from_user_id(DbContext* db, uint32_t user_id, uint8_t** pk){
-    sqlite3_stmt *stmt;
-    int e = sqlite3_prepare_v2(db->db, "select key from public_keys where user_id = ?", -1, &stmt, NULL);
-    if(e != SQLITE_OK) return -1;
-
-    e = sqlite3_bind_int(stmt, 1, user_id);
-    if(e != SQLITE_OK) return -1;
-
-    if(sqlite3_step(stmt) == SQLITE_ROW) {
-        const void* blob = sqlite3_column_blob(stmt, 0); // this blob lives until next sqlite3_step or sqlite3_finalize
-        *pk = calloc(KYBER_PUBLICKEYBYTES, sizeof(uint8_t));
-        memcpy(*pk, blob, KYBER_PUBLICKEYBYTES);
-    }
-
-    sqlite3_finalize(stmt);
-    return 0;
-}
-
-//caller has to clean up username
-int DbContext_get_username_from_user_id(DbContext* db, uint32_t user_id, char** username){
-    sqlite3_stmt *stmt;
-    int e = sqlite3_prepare_v2(db->db, "select username from users where user_id = ?", -1, &stmt, NULL);
-    if(e != SQLITE_OK) return -1;
-
-    e = sqlite3_bind_int(stmt, 1, user_id);
-    if(e != SQLITE_OK) return -1;
-
-    if(sqlite3_step(stmt) == SQLITE_ROW) {
-        const char* name = (const char*)sqlite3_column_text(stmt, 0); // this name lives only until next sqlite3_step or sqlite3_finalize
-        *username = calloc(strlen(name)+1, sizeof(char));
-        memcpy(*username, name, strlen(name)+1);
-    }
-
-    sqlite3_finalize(stmt);
-    return 0;
-}
-
 int main(void) {
     gtinit();
 
-    DbContext db = {0};
+    DbContext* db = NULL;
 
     if(DbContext_init(&db) < 0){
         error("Couldn't initialize database context\n");
@@ -743,10 +653,10 @@ int main(void) {
     }
 
     //TODO: unhardcode users make them actually dynamic
-    DbContext_get_pub_key_from_user_id(&db, 1, &users[USER_F1L1P].pk);
-    DbContext_get_pub_key_from_user_id(&db, 2, &users[USER_DCRAFTBG].pk);
-    DbContext_get_username_from_user_id(&db, 1, (char**)&users[USER_F1L1P].username);
-    DbContext_get_username_from_user_id(&db, 2, (char**)&users[USER_DCRAFTBG].username);
+    DbContext_get_pub_key_from_user_id(db, 1, &users[USER_F1L1P].pk);
+    DbContext_get_pub_key_from_user_id(db, 2, &users[USER_DCRAFTBG].pk);
+    DbContext_get_username_from_user_id(db, 1, (char**)&users[USER_F1L1P].username);
+    DbContext_get_username_from_user_id(db, 2, (char**)&users[USER_DCRAFTBG].username);
 
     list_init(&users[USER_F1L1P].clients);
     list_init(&users[USER_DCRAFTBG].clients);
