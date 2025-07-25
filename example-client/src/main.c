@@ -389,7 +389,7 @@ void onNotification(Client* client, Response* response, IncomingEvent* event) {
         .content_len = content_len,
         .content = content,
         .milis = milis,
-        .author_name = (char*)(notif.author_id < ARRAY_LEN(author_names) ? author_names[notif.author_id] : "UNKNOWN")
+        .author_name = (char*)(notif.author_id - 1 < ARRAY_LEN(author_names) ? author_names[notif.author_id - 1] : "UNKNOWN")
     };
     da_push(event->as.onNotification.msgs, msg);
     redraw();
@@ -470,7 +470,7 @@ void redraw(void) {
     uibox_draw_border(term_box, '=', '|', '+');
     // stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
     char buf[128];
-    snprintf(buf, sizeof(buf), "DMs: %s", dming < ARRAY_LEN(author_names) ? author_names[dming] : "UNKNOWN");
+    snprintf(buf, sizeof(buf), "DMs: %s", dming - 1 < ARRAY_LEN(author_names) ? author_names[dming - 1] : "UNKNOWN");
     {
         char* str = buf;
         size_t x = term_box.l + 2;
@@ -753,7 +753,7 @@ int main(int argc, const char** argv) {
 
             // TODO: verify all this sheize^
             Message msg = {
-                .author_name = msgs_resp.author_id < ARRAY_LEN(author_names) ? (char*)author_names[msgs_resp.author_id] : "UNKNOWN",
+                .author_name = msgs_resp.author_id - 1 < ARRAY_LEN(author_names) ? (char*)author_names[msgs_resp.author_id - 1] : "UNKNOWN",
                 .milis = milis,
                 .content_len = content_len,
                 .content = content
@@ -844,7 +844,7 @@ int main(int argc, const char** argv) {
                 memcpy(msg, prompt.items, prompt.len);
                 incoming_events[req.packet_id].as.onMessage.msg = (Message) {
                     .milis = time_unix_milis(),
-                    .author_name = (char*)(userID < ARRAY_LEN(author_names) ? author_names[userID] : "(You. Dumbass)"),
+                    .author_name = (char*)(userID - 1 < ARRAY_LEN(author_names) ? author_names[userID - 1] : "(You. Dumbass)"),
                     .content_len = prompt.len,
                     .content = msg,
                 };
