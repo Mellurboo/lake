@@ -398,6 +398,7 @@ Messages msgs;
 size_t term_width, term_height;
 StringBuilder prompt = { 0 };
 bool tab_list = false;
+uint16_t tab_list_selection = 0;
 void redraw(void) {
     for(size_t y = 0; y < term_height; ++y) {
         for(size_t x = 0; x < term_width; ++x) {
@@ -407,11 +408,11 @@ void redraw(void) {
     UIBox term_box = {
         0, 0, term_width - 1, term_height - 1
     };
+    UIBox tab_list_box;
     if(tab_list) {
-        UIBox tab_list = uibox_chop_left(&term_box, (term_box.r - term_box.l) * 14 / 100);
-        uibox_draw_border(tab_list, '=', '|', '+');
+        tab_list_box = uibox_chop_left(&term_box, (term_box.r - term_box.l) * 14 / 100);
+        uibox_draw_border(tab_list_box, '=', '|', '+');
     }
-    (void)tab_list;
     UIBox input_box = uibox_chop_bottom(&term_box, 1);
     uibox_draw_border(term_box, '=', '|', '+');
     // stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
@@ -435,7 +436,8 @@ void redraw(void) {
         stui_putchar(input_box.l + 2 + i, input_box.b, prompt.items[i]);
     }
     stui_refresh();
-    stui_goto(input_box.l + 2 + i, input_box.b);
+    if(tab_list) stui_goto(uibox_inner(tab_list_box).l, uibox_inner(tab_list_box).t + tab_list_selection);
+    else stui_goto(input_box.l + 2 + i, input_box.b);
 }
 const char* shift_args(int *argc, const char ***argv) {
     if((*argc) <= 0) return NULL;
@@ -731,49 +733,57 @@ int main(int argc, const char** argv) {
         redraw();
         gtblockfd(fileno(stdin), GTBLOCKIN);
         int c = getchar();
-        switch(c) {
-        case '\b':
-        case 127:
-            if(prompt.len) prompt.len--;
-            break;
-        case '\t':
-            tab_list = !tab_list;
-            break;
-        case '\n': {
-            // FIXME: sending empty message causes it to go bogus amogus
-            if(prompt.len == 0) continue;
-            if(prompt.len == 5 && memcmp(prompt.items, ":quit", prompt.len) == 0) goto end;
-            Request req = {
-                .protocol_id = msg_protocol_id,
-                .func_id = 0,
-                .packet_id = allocate_incoming_event(),
-                .packet_len = sizeof(SendMsgRequest) + prompt.len
-            };
-            incoming_events[req.packet_id].as.onMessage.msgs = &msgs;
-            char* msg = malloc(prompt.len);
-            memcpy(msg, prompt.items, prompt.len);
-            incoming_events[req.packet_id].as.onMessage.msg = (Message) {
-                .milis = time_unix_milis(),
-                .author_name = (char*)(userID < ARRAY_LEN(author_names) ? author_names[userID] : "(You. Dumbass)"),
-                .content_len = prompt.len,
-                .content = msg,
-            };
-            incoming_events[req.packet_id].onEvent = okOnMessage;
-            SendMsgRequest send_msg = {
-                .server_id = 0,
-                .channel_id = dming,
-            };
-            request_hton(&req);
-            sendMsgRequest_hton(&send_msg);
-            pbwrite(&client.pb, &req, sizeof(req));
-            pbwrite(&client.pb, &send_msg, sizeof(send_msg));
-            pbwrite(&client.pb, prompt.items, prompt.len);
-            pbflush(&client.pb, &client);
-            prompt.len = 0;
-        } break;
-        default:
-            da_push(&prompt, c);
-            break;
+        if(tab_list) {
+            switch(c) {
+            case '\t':
+                tab_list = !tab_list;
+                break;
+            }
+        } else {
+            switch(c) {
+            case '\b':
+            case 127:
+                if(prompt.len) prompt.len--;
+                break;
+            case '\t':
+                tab_list = !tab_list;
+                break;
+            case '\n': {
+                // FIXME: sending empty message causes it to go bogus amogus
+                if(prompt.len == 0) continue;
+                if(prompt.len == 5 && memcmp(prompt.items, ":quit", prompt.len) == 0) goto end;
+                Request req = {
+                    .protocol_id = msg_protocol_id,
+                    .func_id = 0,
+                    .packet_id = allocate_incoming_event(),
+                    .packet_len = sizeof(SendMsgRequest) + prompt.len
+                };
+                incoming_events[req.packet_id].as.onMessage.msgs = &msgs;
+                char* msg = malloc(prompt.len);
+                memcpy(msg, prompt.items, prompt.len);
+                incoming_events[req.packet_id].as.onMessage.msg = (Message) {
+                    .milis = time_unix_milis(),
+                    .author_name = (char*)(userID < ARRAY_LEN(author_names) ? author_names[userID] : "(You. Dumbass)"),
+                    .content_len = prompt.len,
+                    .content = msg,
+                };
+                incoming_events[req.packet_id].onEvent = okOnMessage;
+                SendMsgRequest send_msg = {
+                    .server_id = 0,
+                    .channel_id = dming,
+                };
+                request_hton(&req);
+                sendMsgRequest_hton(&send_msg);
+                pbwrite(&client.pb, &req, sizeof(req));
+                pbwrite(&client.pb, &send_msg, sizeof(send_msg));
+                pbwrite(&client.pb, prompt.items, prompt.len);
+                pbflush(&client.pb, &client);
+                prompt.len = 0;
+            } break;
+            default:
+                da_push(&prompt, c);
+                break;
+            }
         }
     }
 end:
