@@ -26,7 +26,7 @@ static bool go_run_nob_inside(Nob_Cmd* cmd, const char* dir) {
 }
 
 void help(FILE* sink, const char* exe) {
-    fprintf(sink, "%s (example-client|example-server|example-keygen|example-server-utils (run)) \n", exe);
+    fprintf(sink, "%s (client|server|keygen|server-utils (run)) \n", exe);
 }
 int main(int argc, char** argv) {
     NOB_GO_REBUILD_URSELF(argc, argv);
@@ -62,10 +62,10 @@ int main(int argc, char** argv) {
             continue;
         }
         if(strcmp(arg, "--") == 0) capturing_args = true;
-        else if(strcmp(arg, "example-client") == 0) example = EXAMPLE_CLIENT;
-        else if(strcmp(arg, "example-server") == 0) example = EXAMPLE_SERVER;
-        else if(strcmp(arg, "example-keygen") == 0) example = EXAMPLE_KEYGEN;
-        else if(strcmp(arg, "example-server-utils") == 0) example = EXAMPLE_SERVER_UTILS;
+        else if(strcmp(arg, "client") == 0) example = EXAMPLE_CLIENT;
+        else if(strcmp(arg, "server") == 0) example = EXAMPLE_SERVER;
+        else if(strcmp(arg, "keygen") == 0) example = EXAMPLE_KEYGEN;
+        else if(strcmp(arg, "server-utils") == 0) example = EXAMPLE_SERVER_UTILS;
         else if(strcmp(arg, "run") == 0) run = true;
         else {
             nob_log(NOB_ERROR, "Unexpected argument: `%s`", arg);
@@ -78,38 +78,38 @@ int main(int argc, char** argv) {
     // I know there's more elegant ways to do it but frick you
     switch(example) {
     case EXAMPLE_ALL:
-        if(!go_run_nob_inside(&cmd, "example-client")) return 1;
-        if(!go_run_nob_inside(&cmd, "example-server")) return 1;
-        if(!go_run_nob_inside(&cmd, "example-server-utils")) return 1;
-        if(!go_run_nob_inside(&cmd, "example-keygen")) return 1;
+        if(!go_run_nob_inside(&cmd, "client")) return 1;
+        if(!go_run_nob_inside(&cmd, "server")) return 1;
+        if(!go_run_nob_inside(&cmd, "server-utils")) return 1;
+        if(!go_run_nob_inside(&cmd, "keygen")) return 1;
         break;
     case EXAMPLE_SERVER:
-        if(!go_run_nob_inside(&cmd, "example-server")) return 1;
+        if(!go_run_nob_inside(&cmd, "server")) return 1;
         break;
     case EXAMPLE_SERVER_UTILS:
-        if(!go_run_nob_inside(&cmd, "example-server-utils")) return 1;
+        if(!go_run_nob_inside(&cmd, "server-utils")) return 1;
         break;
     case EXAMPLE_CLIENT:
-        if(!go_run_nob_inside(&cmd, "example-client")) return 1;
+        if(!go_run_nob_inside(&cmd, "client")) return 1;
         break;
     case EXAMPLE_KEYGEN:
-        if(!go_run_nob_inside(&cmd, "example-keygen")) return 1;
+        if(!go_run_nob_inside(&cmd, "keygen")) return 1;
         break;
     }
 
     if(run && example != EXAMPLE_ALL) {
         switch(example) {
         case EXAMPLE_CLIENT:
-            cmd_append(&cmd, "./.build/example-client/example-client"EXE_SUFFIX);
+            cmd_append(&cmd, "./.build/client/client"EXE_SUFFIX);
             break;
         case EXAMPLE_SERVER:
-            cmd_append(&cmd, "./.build/example-server/example-server"EXE_SUFFIX);
+            cmd_append(&cmd, "./.build/server/server"EXE_SUFFIX);
             break;
         case EXAMPLE_SERVER_UTILS:
-            cmd_append(&cmd, "./.build/example-server-utils/example-server-utils"EXE_SUFFIX);
+            cmd_append(&cmd, "./.build/server-utils/server-utils"EXE_SUFFIX);
             break;
         case EXAMPLE_KEYGEN:
-            cmd_append(&cmd, "./.build/example-keygen/example-keygen"EXE_SUFFIX);
+            cmd_append(&cmd, "./.build/keygen/keygen"EXE_SUFFIX);
             break;
         }
         da_append_many(&cmd, run_args.items, run_args.count);
