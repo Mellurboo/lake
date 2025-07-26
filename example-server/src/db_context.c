@@ -173,22 +173,15 @@ int DbContext_send_msg(DbContext* db, uint32_t server_id, uint32_t channel_id, u
         char buf[255] = {0};
         snprintf(buf, sizeof(buf), "insert into dm_%u_%u(author_id, milis, content) values(?, ?, ?)", min_user_id, max_user_id);
         e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
-        fprintf(stderr, "sqlite3_prepare_v2()\n");
         if(e != SQLITE_OK) goto sqlite_bind_err;
-        fprintf(stderr, "sqlite3_bind_int()\n");
         e = sqlite3_bind_int(stmt, 1, author_id);
         if(e != SQLITE_OK) goto sqlite_bind_err;
-        fprintf(stderr, "sqlite3_bind_int64()\n");
         e = sqlite3_bind_int64(stmt, 2, milis);
         if(e != SQLITE_OK) goto sqlite_bind_err;
-        fprintf(stderr, "sqlite3_bind_text()\n");
         e = sqlite3_bind_text(stmt, 3, content, content_len, SQLITE_STATIC);
         if(e != SQLITE_OK) goto sqlite_bind_err;
-        fprintf(stderr, "sqlite3_step()\n");
         e = sqlite3_step(stmt);
-        fprintf(stderr, "e = %d\n", e);
         if(e != SQLITE_DONE) goto sqlite_step_err;
-        fprintf(stderr, "sqlite3_finalize()\n");
         sqlite3_finalize(stmt);
         return 0;
     sqlite_step_err:
