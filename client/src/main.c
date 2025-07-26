@@ -31,6 +31,79 @@ uint64_t time_unix_milis(void) {
 #endif
 }
 
+typedef struct UserMapBucket UserMapBucket;
+struct UserMapBucket {
+    UserMapBucket* next;
+    uint32_t user_id;
+    char* username;
+};
+typedef struct {
+    struct {
+        UserMapBucket** items;
+        size_t len;
+    } buckets;
+    size_t len;
+} UserMap;
+bool user_map_reserve(UserMap* map, size_t extra) {
+    if(map->len + extra > map->buckets.len) {
+        size_t ncap = map->buckets.len*2 + extra;
+        UserMapBucket** newbuckets = malloc(sizeof(*newbuckets)*ncap);
+        if(!newbuckets) return false;
+        memset(newbuckets, 0, sizeof(*newbuckets) * ncap);
+        for(size_t i = 0; i < map->buckets.len; ++i) {
+            UserMapBucket* oldbucket = map->buckets.items[i];
+            while(oldbucket) {
+                UserMapBucket* next = oldbucket->next;
+                size_t hash = ((size_t)oldbucket->user_id) % ncap;
+                UserMapBucket* newbucket = newbuckets[hash];
+                oldbucket->next = newbucket;
+                newbuckets[hash] = oldbucket;
+                oldbucket = next;
+            }
+        }
+        free(map->buckets.items);
+        map->buckets.items = newbuckets;
+        map->buckets.len = ncap;
+    }
+    return true;
+}
+UserMapBucket* user_map_insert(UserMap* map, uint32_t user_id) {
+    if(!user_map_reserve(map, 1)) return NULL;
+    size_t hash = ((size_t)user_id) % map->buckets.len;
+    UserMapBucket* into = map->buckets.items[hash];
+    UserMapBucket* bucket = calloc(sizeof(UserMapBucket), 1);
+    if(!bucket) return NULL;
+    bucket->next = into;
+    bucket->user_id = user_id;
+    map->buckets.items[hash] = bucket;
+    map->len++;
+    return bucket;
+}
+UserMapBucket* user_map_get(UserMap* map, uint32_t user_id) {
+    if(map->len == 0) return NULL;
+    assert(map->buckets.len > 0);
+    size_t hash = ((size_t)user_id) % map->buckets.len;
+    UserMapBucket* bucket = map->buckets.items[hash];
+    while(bucket) {
+        if(bucket->user_id == user_id) return bucket;
+        bucket = bucket->next;
+    }
+    return NULL;
+}
+UserMapBucket* user_map_get_or_insert(UserMap* map, uint32_t user_id) {
+    UserMapBucket* bucket = user_map_get(map, user_id);
+    if(bucket) return bucket;
+    return user_map_insert(map, user_id);
+}
+static UserMap user_map = { 0 };
+
+typedef struct {
+    uint32_t userID;
+} GetUserInfoPacket;
+void getUserInfoPacket_hton(GetUserInfoPacket* packet){
+    packet->userID = htonl(packet->userID);
+}
+
 typedef struct {
     uint32_t protocol_id;
     uint32_t func_id;
@@ -313,6 +386,51 @@ size_t allocate_incoming_event(void) {
     // unreachable
     // return ~0;
 }
+
+uint32_t user_protocol_id = 0;
+
+//TODO: getting info from db doesnt work during MessagesBeforePacket idk what about during notifications
+char* get_author_name(Client* client, uint32_t author_id){
+    UserMapBucket* user = user_map_get_or_insert(&user_map, author_id);
+
+    if(user->username == NULL){
+        if(user_protocol_id == 0) return "BOGUS";
+
+        GetUserInfoPacket packet = {
+            .userID = author_id
+        };
+
+        getUserInfoPacket_hton(&packet);
+
+        Request request = {
+            .protocol_id = user_protocol_id,
+            .func_id = 0,
+            .packet_id = 2137,
+            .packet_len = sizeof(GetUserInfoPacket)
+        };
+
+        request_hton(&request);
+
+        pbwrite(&client->pb, &request, sizeof(Request));
+        pbwrite(&client->pb, &packet, sizeof(packet));
+        intptr_t e = pbflush(&client->pb, client);
+
+        Response resp;
+        client_discard_read_buf(client);
+        e = client_read_(client, &resp, sizeof(resp));
+        assert(e == 1);
+        response_ntoh(&resp);
+        if(resp.opcode == 1 || resp.packet_len == 0){
+            user->username = "UNKNOWN";
+        }else{
+            user->username = calloc(resp.packet_len + 1, 1);
+            assert(client_read_(client, user->username, resp.packet_len) == 1);
+        }
+    }
+
+    return user->username;
+}
+
 void reader_thread(void* client_void) {
     Client* client = client_void;
     int e;
@@ -360,11 +478,6 @@ void notification_ntoh(Notification* packet) {
     packet->milis_low = ntohl(packet->milis_low);
     packet->milis_high = ntohl(packet->milis_high);
 }
-// TODO: unhardcode this and local user hashmap.
-static const char* author_names[] = {
-    "f1l1p",
-    "dcraftbg"
-};
 uint32_t dming;
 void onNotification(Client* client, Response* response, IncomingEvent* event) {
     // SKIP
@@ -389,7 +502,7 @@ void onNotification(Client* client, Response* response, IncomingEvent* event) {
         .content_len = content_len,
         .content = content,
         .milis = milis,
-        .author_name = (char*)(notif.author_id - 1 < ARRAY_LEN(author_names) ? author_names[notif.author_id - 1] : "UNKNOWN")
+        .author_name = get_author_name(client, notif.author_id),
     };
     da_push(event->as.onNotification.msgs, msg);
     redraw();
@@ -470,7 +583,7 @@ void redraw(void) {
     uibox_draw_border(term_box, '=', '|', '+');
     // stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
     char buf[128];
-    snprintf(buf, sizeof(buf), "DMs: %s", dming - 1 < ARRAY_LEN(author_names) ? author_names[dming - 1] : "UNKNOWN");
+    snprintf(buf, sizeof(buf), "DMs: %s", get_author_name(&client,dming));
     {
         char* str = buf;
         size_t x = term_box.l + 2;
@@ -510,6 +623,9 @@ void register_signals(void) {
     signal(SIGWINCH, _interrupt_handler_resize);
 #endif
 }
+
+
+
 int main(int argc, const char** argv) {
     register_signals();
     gtinit();
@@ -614,6 +730,7 @@ int main(int argc, const char** argv) {
         if(strcmp(protocol->name, "auth") == 0) auth_protocol_id = protocol->id;
         if(strcmp(protocol->name, "msg")  == 0) msg_protocol_id = protocol->id; 
         if(strcmp(protocol->name, "notify") == 0) notify_protocol_id = protocol->id;
+        if(strcmp(protocol->name, "user") == 0) user_protocol_id = protocol->id;
         free(protocol);
     }
     if(!msg_protocol_id) {
@@ -709,6 +826,9 @@ int main(int argc, const char** argv) {
         dming = atoi(buf);
     }
     {
+        //TODO: make so it works during other requests or refactor it
+        get_author_name(&client, 1);
+        get_author_name(&client, 2);
         Request request = {
             .protocol_id = msg_protocol_id,
             .func_id = 1,
@@ -747,9 +867,11 @@ int main(int argc, const char** argv) {
             uint64_t milis = (((uint64_t)msgs_resp.milis_high) << 32) | (uint64_t)msgs_resp.milis_low;
             client_read_(&client, content, content_len);
 
+            printf("neckgro\n");
+
             // TODO: verify all this sheize^
             Message msg = {
-                .author_name = msgs_resp.author_id - 1 < ARRAY_LEN(author_names) ? (char*)author_names[msgs_resp.author_id - 1] : "UNKNOWN",
+                .author_name = get_author_name(&client, msgs_resp.author_id),
                 .milis = milis,
                 .content_len = content_len,
                 .content = content
@@ -757,6 +879,8 @@ int main(int argc, const char** argv) {
             da_insert(&msgs, 0, msg);
         }
     }
+
+    printf("neckgro\n");
 
     stui_clear();
     stui_term_get_size(&term_width, &term_height);
@@ -840,7 +964,7 @@ int main(int argc, const char** argv) {
                 memcpy(msg, prompt.items, prompt.len);
                 incoming_events[req.packet_id].as.onMessage.msg = (Message) {
                     .milis = time_unix_milis(),
-                    .author_name = (char*)(userID - 1 < ARRAY_LEN(author_names) ? author_names[userID - 1] : "(You. Dumbass)"),
+                    .author_name = get_author_name(&client, userID),
                     .content_len = prompt.len,
                     .content = msg,
                 };
