@@ -92,6 +92,23 @@ int DbContext_get_pub_key_from_user_id(DbContext* db, uint32_t user_id, uint8_t*
     return 0;
 }
 
+// Returns 1 on exists.
+// Returns 0 on non exists
+// Returns <0 on error
+int DbContext_user_exists(DbContext* db, uint32_t user_id) {
+    sqlite3_stmt *stmt;
+    int e = sqlite3_prepare_v2(db->db, "select user_id from users where user_id = ?", -1, &stmt, NULL);
+    if(e != SQLITE_OK) return -1;
+    e = sqlite3_bind_int(stmt, 1, user_id);
+    if(e != SQLITE_OK) return -1;
+    e = 0;
+    if(sqlite3_step(stmt) == SQLITE_ROW) {
+        e = 1;
+    }
+    sqlite3_finalize(stmt);
+    return e;
+}
+
 //caller has to clean up username
 int DbContext_get_username_from_user_id(DbContext* db, uint32_t user_id, char** username){
     sqlite3_stmt *stmt;
@@ -143,7 +160,13 @@ int DbContext_send_msg(DbContext* db, uint32_t server_id, uint32_t channel_id, u
         uint32_t max_user_id = author_id < channel_id ? channel_id : author_id;
         uint32_t min_user_id = author_id < channel_id ? author_id : channel_id;
 
-        int e = DbContext_create_dms_if_not_exist(db, min_user_id, max_user_id);
+        // Check if user exists
+        int e = DbContext_user_exists(db, channel_id);
+        // TODO: errors
+        if(e <= 0) return -1;
+
+        e = DbContext_create_dms_if_not_exist(db, min_user_id, max_user_id);
+        // TODO: errors
         if(e < 0) return -1;
 
         char* msg = calloc(content_len + 1, 1);
