@@ -132,6 +132,7 @@ int main(int argc, char** argv) {
         );
         // Includes
         cmd_append(&cmd, "-I../vendor");
+        cmd_append(&cmd, "-Isrc/");
         // Actual compilation
         cmd_append(&cmd,
             "-MP", "-MMD", "-O1", "-g", "-c",

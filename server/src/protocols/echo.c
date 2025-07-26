@@ -1,0 +1,24 @@
+#include "protocol.h"
+#include "request.h"
+#include "response.h"
+#include "client.h"
+
+void echoEcho(Client* client, Request* header) {
+    char buf[128];
+    // TODO: send some error here:
+    if(header->packet_len > sizeof(buf)) return;
+    client_read_(client, buf, header->packet_len);
+    Response resp = {
+        .packet_id = header->packet_id,
+        .opcode = 0,
+        .packet_len = header->packet_len
+    };
+    response_hton(&resp);
+    pbwrite(&client->pb, &resp, sizeof(resp));
+    pbwrite(&client->pb, buf, header->packet_len);
+    pbflush(&client->pb, client);
+}
+protocol_func_t echoProtocolFuncs[] = {
+    echoEcho,
+};
+Protocol echoProtocol = PROTOCOL("echo", echoProtocolFuncs);
