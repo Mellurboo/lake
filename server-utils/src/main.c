@@ -7,71 +7,121 @@
 #include <stddef.h>
 #include "sqlite3/sqlite3.h"
 
-static int sqlite_callback(void* data, int argc, char** argv, char** azColName) {
-    (void)data;
-    for(int i = 0; i < argc; i++){
-        printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
-    }
-    return 0;
-}
-
-void execute_sql(sqlite3* db, const char* sql){
+int execute_sql(sqlite3* db, const char* sql){
     char* err_msg = NULL;
 
-    int rc = sqlite3_exec(
+    int e = sqlite3_exec(
         db,
         sql,
-        sqlite_callback,
+        NULL,
         0,
         &err_msg
     );
 
-    if(rc != SQLITE_OK){
+    if(e != SQLITE_OK){
         fprintf(stderr, "SQL error: %s\n", err_msg);
         sqlite3_free(err_msg);
     }
+
+    return e;
+}
+
+typedef struct{
+    const char* public_key_filename;
+    const char* username;
+} User;
+
+typedef struct{
+    User* items;
+    size_t count, capacity;
+} Users;
+
+void usage(const char* program){
+    printf("[USAGE] %s [-u <public key filepath> <username>] || --help\n", program);
 }
 
 int main(int argc, char** argv){
-    if(argc < 3){
-        fprintf(stderr, "Usage %s <key.pub filename> <username>", argv[0]);
+    const char* program = shift_args(&argc, &argv);
+    (void)program;
+
+    Users users = {0};
+
+    bool help = false;
+
+    while(argc){
+        const char* arg = shift_args(&argc, &argv);
+
+        if(strcmp(arg, "-u") == 0){
+            User user = {0};
+            if(!argc){
+                usage(program);
+                fprintf(stderr, "[ERROR] expected public key filename\n");
+                return 1;
+            }
+
+            user.public_key_filename = shift_args(&argc, &argv);
+
+            if(!argc){
+                usage(program);
+                fprintf(stderr, "[ERORR] expected username after public key\n");
+                return 1;
+            }
+
+            user.username = shift_args(&argc, &argv);
+            da_append(&users, user);
+            continue;
+        }else if(strcmp(arg, "--help") == 0){
+            usage(program);
+            return 0;
+        }
+
+        usage(program);
+        fprintf(stderr, "[ERROR] Unknown flag %s\n", arg);
+        return 1;
     }
 
     sqlite3* db;
 
     if (sqlite3_open("database.db",&db) != SQLITE_OK){ 
-        fprintf(stderr, "Couldn't open database");
+        fprintf(stderr, "[ERROR] Couldn't open database");
         return 1;
     }
 
-    execute_sql(db, temp_sprintf("insert into users(username) values (\"%s\")", argv[2]));
-
-    size_t userID = sqlite3_last_insert_rowid(db);
+    int e = execute_sql(db, "create table if not exists public_keys(key blob, user_id INTEGER, PRIMARY KEY(key), FOREIGN KEY(user_id) REFERENCES users(id));");
+    if(e != SQLITE_OK) return -1;
+    e = execute_sql(db, "create table if not exists users(user_id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT, username text);");
+    if(e != SQLITE_OK) return -1;
+    e = execute_sql(db, "create table if not exists dms(min_user_id INTEGER, max_user_id INTEGER)");
+    if(e != SQLITE_OK) return -1;
 
     String_Builder sb = {0};
-
-    if(!read_entire_file(argv[1], &sb)) {
-        fprintf(stderr, "Invalid public key filename");
-        return 1;
-    }
-
     sqlite3_stmt *stmt;
-    int rc = sqlite3_prepare_v2(db, "insert into public_keys(key, user_id) values (?, ?);", -1, &stmt, 0);
-    if(rc != SQLITE_OK){
-        printf("error!\n");
-        return 1;
+    for(size_t i = 0; i < users.count; i++){
+        sb.count = 0;
+        User* user = &users.items[i];
+
+        if(!read_entire_file(user->public_key_filename, &sb)) {
+            fprintf(stderr, "Invalid public key filename \"%s\"", user->public_key_filename);
+            return 1;
+        }
+
+        e = execute_sql(db, temp_sprintf("insert into users(username) values (\"%s\")", user->username));
+        if(e != SQLITE_OK) return -1;
+        size_t userID = sqlite3_last_insert_rowid(db);
+        e = sqlite3_prepare_v2(db, "insert into public_keys(key, user_id) values (?, ?);", -1, &stmt, 0);
+        if(e != SQLITE_OK) return -1;
+
+        e = sqlite3_bind_blob(stmt, 1, sb.items, sb.count, SQLITE_STATIC);
+        if(e != SQLITE_OK) return -1;
+        e = sqlite3_bind_int(stmt, 2, userID);
+        if(e != SQLITE_OK) return -1;
+
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
     }
 
-    sqlite3_bind_blob(stmt, 1, sb.items, sb.count, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 2, userID);
 
-    rc = sqlite3_step(stmt);
-    if(rc != SQLITE_DONE){
-        printf("error\n");
-        return 1;
-    }
 
-    sqlite3_finalize(stmt);
     sqlite3_close(db);
 
     return 0;
