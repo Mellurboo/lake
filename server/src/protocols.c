@@ -5,6 +5,7 @@
 #include "protocols/echo.h"
 #include "protocols/msg.h"
 #include "protocols/notify.h"
+#include "protocols/user.h"
 
 Protocol* protocols[] = {
     &coreProtocol,
@@ -14,6 +15,7 @@ Protocol* protocols[] = {
     &echoProtocol,
     &msgProtocol,
     &notifyProtocol,
+    &userProtocol,
 };
 size_t protocols_count = ARRAY_LEN(protocols);
 
