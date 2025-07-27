@@ -50,7 +50,20 @@ typedef struct {
 void sendMsg(Client* client, Request* header) {
     // NOTE: we hard assert its MORE because you need at least 1 character per message
     // TODO: send some error here:
-    if(header->packet_len <= sizeof(SendMsgPacket)) return;
+    if(header->packet_len <= sizeof(SendMsgPacket)) {
+        char buf[sizeof(SendMsgPacket)];
+        // NOTE: discarding the buffer.
+        client_read_(client, buf, header->packet_len);
+        Response resp = {
+            .packet_id = header->packet_id,
+            .opcode = 1,
+            .packet_len = 0
+        };
+        response_hton(&resp);
+        pbwrite(&client->pb, &resp, sizeof(Response));
+        pbflush(&client->pb, client);
+        return;
+    }
     SendMsgPacket packet = { 0 };
     int n = client_read_(client, &packet, sizeof(packet));
     // TODO: send some error here:
