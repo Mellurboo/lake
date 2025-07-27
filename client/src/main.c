@@ -130,7 +130,7 @@ typedef struct {
 } PacketBuilder;
 
 static void pbwrite(PacketBuilder* pb, const void* buf, size_t size) {
-    da_reserve(pb, ALIGN16(size));
+    da_reserve(pb, ALIGN16(pb->len + size) - pb->len);
     memcpy(pb->items + pb->len, buf, size);
     pb->len += size;
 }
