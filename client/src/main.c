@@ -36,6 +36,7 @@ struct UserMapBucket {
     UserMapBucket* next;
     uint32_t user_id;
     char* username;
+    bool in_progress;
 };
 typedef struct {
     struct {
@@ -180,6 +181,7 @@ intptr_t client_do_read(Client* client, void* buf, size_t size) {
     return 1;
 }
 intptr_t client_read_(Client* client, void* buf, size_t size) {
+    if(size == 0) return 1;
     intptr_t e;
     if(client->has_read_buffer_data) {
         size_t buf_remaining = sizeof(client->read_buffer) - client->read_buffer_head;
@@ -224,15 +226,6 @@ static intptr_t client_do_write(Client* client, void* buf, size_t size) {
     return gtwrite_exact(client->fd, buf, size);
 }
 static intptr_t pbflush(PacketBuilder* pb, Client* client) {
-#if 0
-    fprintf(stderr, "Sending:   ");
-    for(size_t i = 0; i < ALIGN16(pb->len); ++i) {
-        if(i % 4 == 0) fprintf(stderr, " ");
-        if(i % (4 * 16) == 0) fprintf(stderr, "\n    ");
-        fprintf(stderr, "%02X", pb->items[i]);
-    }
-    fprintf(stderr, "\n");
-#endif
     intptr_t e = client_do_write(client, pb->items, ALIGN16(pb->len));
     pb->len = 0;
     return e;
@@ -281,7 +274,7 @@ typedef struct {
 #define PORT 6969
 typedef struct {
     uint64_t milis;
-    char* author_name;
+    uint32_t author_id;
     uint32_t content_len;
     char* content;
 } Message;
@@ -312,7 +305,9 @@ typedef struct {
     Message* items;
     size_t len, cap;
 } Messages;
-void render_messages(UIBox box, Messages* msgs) {
+
+char* get_author_name(Client* client, uint32_t author_id);
+void render_messages(Client* client, UIBox box, Messages* msgs) {
     size_t box_width = box.r - box.l;
     int32_t y_offset_start = box.b - box.t + 1;
     for(size_t i = msgs->len; i > 0; --i) {
@@ -323,7 +318,15 @@ void render_messages(UIBox box, Messages* msgs) {
         char prefix[256];
         time_t msg_time_secs = msg->milis / 1000;
         struct tm* msg_time = localtime(&msg_time_secs);
-        size_t prefix_len = snprintf(prefix, sizeof(prefix), "<%02d/%02d/%02d> %s: ", msg_time->tm_mday, msg_time->tm_mon + 1, msg_time->tm_year % 100, msg->author_name);
+
+
+        char tmp_author_name[20];
+        char* author_name = get_author_name(client, msg->author_id);
+        if(!author_name) {
+            snprintf(tmp_author_name, sizeof(tmp_author_name), "User #%u", msg->author_id);
+            author_name = tmp_author_name;
+        }
+        size_t prefix_len = snprintf(prefix, sizeof(prefix), "<%02d/%02d/%02d> %s: ", msg_time->tm_mday, msg_time->tm_mon + 1, msg_time->tm_year % 100, author_name);
         size_t msg_lines = (prefix_len + msg->content_len + (box_width - 1)) / box_width;
         y_offset_start -= msg_lines;
         char* prefix_cursor = prefix;
@@ -351,9 +354,6 @@ void render_messages(UIBox box, Messages* msgs) {
     }
 }
 
-inline Message cstr_msg(const char* author, const char* content) {
-    return (Message){.milis = time_unix_milis(), .author_name = (char*)author, .content_len = strlen(content), .content = (char*)content };
-}
 static stui_term_flag_t prev_term_flags = 0;
 void restore_prev_term(void) {
     stui_term_set_flags(prev_term_flags);
@@ -369,6 +369,7 @@ struct IncomingEvent {
     union {
         struct { Messages* msgs; Message msg; } onMessage;
         struct { Messages* msgs; } onNotification;
+        struct { UserMapBucket* user; } onUserInfo;
     } as;
 };
 #define MAX_INCOMING_EVENTS 128
@@ -388,44 +389,55 @@ size_t allocate_incoming_event(void) {
 }
 
 uint32_t user_protocol_id = 0;
-
+void redraw(void);
+void onUserInfo(Client* client, Response* response, IncomingEvent* event) {
+    event->onEvent = NULL;
+    UserMapBucket* user = event->as.onUserInfo.user;
+    // NOTE: not entirely necessary but who cares
+    // readability I guess
+    user->in_progress = false;
+    if(response->packet_len == 0) {
+        user->username = "BOGUS";
+        return;
+    }
+    if(response->packet_len > 128) {
+        user->username = "<Too long>";
+        // FIXME: discard packet data on here
+        return;
+    }
+    user->username = calloc(response->packet_len + 1, 1);
+    int e = client_read_(client, user->username, response->packet_len);
+    (void)e;
+    redraw();
+}
 //TODO: getting info from db doesnt work during MessagesBeforePacket idk what about during notifications
 char* get_author_name(Client* client, uint32_t author_id){
     UserMapBucket* user = user_map_get_or_insert(&user_map, author_id);
 
-    if(user->username == NULL){
-        if(user_protocol_id == 0) return "BOGUS";
-
+    if(user->username == NULL && !user->in_progress) {
+        if(user_protocol_id == 0) return NULL;
         GetUserInfoPacket packet = {
             .userID = author_id
         };
 
         getUserInfoPacket_hton(&packet);
-
+        user->in_progress = true;
         Request request = {
             .protocol_id = user_protocol_id,
             .func_id = 0,
-            .packet_id = 2137,
+            .packet_id = allocate_incoming_event(),
             .packet_len = sizeof(GetUserInfoPacket)
         };
+        incoming_events[request.packet_id].as.onUserInfo.user = user;
+        incoming_events[request.packet_id].onEvent = onUserInfo;
 
         request_hton(&request);
-
         pbwrite(&client->pb, &request, sizeof(Request));
         pbwrite(&client->pb, &packet, sizeof(packet));
         intptr_t e = pbflush(&client->pb, client);
-
-        Response resp;
-        client_discard_read_buf(client);
-        e = client_read_(client, &resp, sizeof(resp));
-        assert(e == 1);
-        response_ntoh(&resp);
-        if(resp.opcode == 1 || resp.packet_len == 0){
-            user->username = "UNKNOWN";
-        }else{
-            user->username = calloc(resp.packet_len + 1, 1);
-            assert(client_read_(client, user->username, resp.packet_len) == 1);
-        }
+        (void)e;
+        (void)client;
+        // TODO: error here?
     }
 
     return user->username;
@@ -442,11 +454,9 @@ void reader_thread(void* client_void) {
         response_ntoh(&resp);
         // TODO: skip resp.len amount maybe?
         if(resp.packet_id >= MAX_INCOMING_EVENTS) {
-            fprintf(stderr, "We got some bogus event with packet_id: %u\n", resp.packet_id);
             continue;
         }
         if(!incoming_events[resp.packet_id].onEvent) {
-            fprintf(stderr, "We got some unhandled (bogus?) event with packet_id: %u\n", resp.packet_id);
             continue;
         }
         incoming_events[resp.packet_id].onEvent(client, &resp, &incoming_events[resp.packet_id]);
@@ -502,7 +512,7 @@ void onNotification(Client* client, Response* response, IncomingEvent* event) {
         .content_len = content_len,
         .content = content,
         .milis = milis,
-        .author_name = get_author_name(client, notif.author_id),
+        .author_id = notif.author_id,
     };
     da_push(event->as.onNotification.msgs, msg);
     redraw();
@@ -583,14 +593,21 @@ void redraw(void) {
     uibox_draw_border(term_box, '=', '|', '+');
     // stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
     char buf[128];
-    snprintf(buf, sizeof(buf), "DMs: %s", get_author_name(&client,dming));
+    char tmp_dming_name[20];
+    char* dming_name = get_author_name(&client, dming);
+    // TODO: remove code duplication somehow.
+    if(!dming_name) {
+        snprintf(tmp_dming_name, sizeof(tmp_dming_name), "User #%u", dming);
+        dming_name = tmp_dming_name;
+    }
+    snprintf(buf, sizeof(buf), "DMs: %s", dming_name);
+
     {
         char* str = buf;
         size_t x = term_box.l + 2;
         while(*str) stui_putchar(x++, 0, *str++);
     }
-
-    render_messages(uibox_inner(term_box), &msgs);
+    render_messages(&client, uibox_inner(term_box), &msgs);
     stui_putchar(input_box.l + 0, term_height - 1, '>');
     stui_putchar(input_box.l + 1, term_height - 1, ' ');
     for(size_t i = input_box.l + input_box.l + 2; i < term_width - 1; ++i) {
@@ -712,7 +729,6 @@ int main(int argc, const char** argv) {
         response_ntoh(&resp);
         assert(resp.packet_id == get_extensions_id);
         assert(resp.packet_len < 1024);
-        fprintf(stderr, "packet_id=%u packet_len=%u opcode=%d\n", resp.packet_id, resp.packet_len, (int)resp.opcode);
         if(resp.packet_len == 0) break;
 
         assert(resp.packet_len >= sizeof(uint32_t));
@@ -737,7 +753,6 @@ int main(int argc, const char** argv) {
         fprintf(stderr, "FATAL: no msg protocol\n");
         return 1;
     } 
-    fprintf(stderr, "Sent request successfully!\n");
     uint32_t userID = 0;
     if(auth_protocol_id) {
         printf("Server requires auth\n");
@@ -827,8 +842,6 @@ int main(int argc, const char** argv) {
     }
     {
         //TODO: make so it works during other requests or refactor it
-        get_author_name(&client, 1);
-        get_author_name(&client, 2);
         Request request = {
             .protocol_id = msg_protocol_id,
             .func_id = 1,
@@ -849,7 +862,6 @@ int main(int argc, const char** argv) {
         pbwrite(&client.pb, &msgs_request, sizeof(msgs_request));
         pbflush(&client.pb, &client);
         Response resp;
-        fprintf(stderr, "We in here:\n");
         // TODO: ^^verify things
         for(;;) {
             client_discard_read_buf(&client);
@@ -867,11 +879,9 @@ int main(int argc, const char** argv) {
             uint64_t milis = (((uint64_t)msgs_resp.milis_high) << 32) | (uint64_t)msgs_resp.milis_low;
             client_read_(&client, content, content_len);
 
-            printf("neckgro\n");
-
             // TODO: verify all this sheize^
             Message msg = {
-                .author_name = get_author_name(&client, msgs_resp.author_id),
+                .author_id = msgs_resp.author_id,
                 .milis = milis,
                 .content_len = content_len,
                 .content = content
@@ -879,8 +889,6 @@ int main(int argc, const char** argv) {
             da_insert(&msgs, 0, msg);
         }
     }
-
-    printf("neckgro\n");
 
     stui_clear();
     stui_term_get_size(&term_width, &term_height);
@@ -964,7 +972,7 @@ int main(int argc, const char** argv) {
                 memcpy(msg, prompt.items, prompt.len);
                 incoming_events[req.packet_id].as.onMessage.msg = (Message) {
                     .milis = time_unix_milis(),
-                    .author_name = get_author_name(&client, userID),
+                    .author_id = userID,
                     .content_len = prompt.len,
                     .content = msg,
                 };
