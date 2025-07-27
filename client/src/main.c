@@ -829,7 +829,7 @@ int main(int argc, const char** argv) {
         assert(e == 1);
         userID = ntohl(userID);
 
-        client.secure = true;
+        // client.secure = true;
     }
     dming = ~0;
     {

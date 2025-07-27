@@ -94,7 +94,7 @@ void authAuthenticate(Client* client, Request* header){
     pbwrite(&client->pb, &userID, sizeof(userID));
     pbflush(&client->pb, client);
 
-    client->secure = true;
+    // client->secure = false;
 }
 protocol_func_t authProtocolFuncs[] = {
     authAuthenticate,
