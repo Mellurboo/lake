@@ -19,7 +19,7 @@ void userGetUserInfo(Client* client, Request* header) {
     // TODO: send some error here:
     if(header->packet_len != sizeof(GetUserInfoPacket)) return;
     GetUserInfoPacket packet;
-    int n = client_read_(client, &packet, sizeof(packet));
+    int n = client_read(client, &packet, sizeof(packet));
     // TODO: send some error here:
     if(n < 0 || n == 0) return;
     getUserInfoPacket_ntoh(&packet);
@@ -33,8 +33,7 @@ void userGetUserInfo(Client* client, Request* header) {
             .packet_len = 0,
         };
         response_hton(&resp);
-        pbwrite(&client->pb, &resp, sizeof(resp));
-        pbflush(&client->pb, client);
+        client_write(client, &resp, sizeof(resp));
         return;
     }
 
@@ -44,9 +43,8 @@ void userGetUserInfo(Client* client, Request* header) {
         .packet_len = strlen(username),
     };
     response_hton(&resp);
-    pbwrite(&client->pb, &resp, sizeof(resp));
-    pbwrite(&client->pb, username, strlen(username));
-    pbflush(&client->pb, client);
+    client_write(client, &resp, sizeof(resp));
+    client_write(client, username, strlen(username));
     free(username);
 }
 protocol_func_t userProtocolFuncs[] = {

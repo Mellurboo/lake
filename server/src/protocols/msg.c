@@ -53,19 +53,18 @@ void sendMsg(Client* client, Request* header) {
     if(header->packet_len <= sizeof(SendMsgPacket)) {
         char buf[sizeof(SendMsgPacket)];
         // NOTE: discarding the buffer.
-        client_read_(client, buf, header->packet_len);
+        client_read(client, buf, header->packet_len);
         Response resp = {
             .packet_id = header->packet_id,
             .opcode = 1,
             .packet_len = 0
         };
         response_hton(&resp);
-        pbwrite(&client->pb, &resp, sizeof(Response));
-        pbflush(&client->pb, client);
+        client_write(client, &resp, sizeof(Response));
         return;
     }
     SendMsgPacket packet = { 0 };
-    int n = client_read_(client, &packet, sizeof(packet));
+    int n = client_read(client, &packet, sizeof(packet));
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read0;
     sendMsgPacket_ntoh(&packet);
@@ -75,7 +74,7 @@ void sendMsg(Client* client, Request* header) {
     char* msg = malloc(msg_len);
     // TODO: send some error here:
     if(!msg) return;
-    n = client_read_(client, msg, msg_len);
+    n = client_read(client, msg, msg_len);
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read;
     // TODO: utf8 and isgraphic verifications
@@ -120,10 +119,9 @@ void sendMsg(Client* client, Request* header) {
             };
             notification_hton(&notif);
             // TODO: don't block here? And/or spawn a gt thread for each user we're notifying
-            pbwrite(&user_conn->pb, &resp, sizeof(Response));
-            pbwrite(&user_conn->pb, &notif, sizeof(Notification));
-            pbwrite(&user_conn->pb, msg, msg_len);
-            pbflush(&user_conn->pb, user_conn);
+            client_write(user_conn, &resp, sizeof(Response));
+            client_write(user_conn, &notif, sizeof(Notification));
+            client_write(user_conn, msg, msg_len);
         }
     }
     free(participants.items);
@@ -153,7 +151,6 @@ void sendMsg(Client* client, Request* header) {
             pbwrite(&user_conn->pb, &resp, sizeof(Response));
             pbwrite(&user_conn->pb, &notif, sizeof(Notification));
             pbwrite(&user_conn->pb, msg, msg_len);
-            pbflush(&user_conn->pb, user_conn);
         }
     }
     */
@@ -163,8 +160,7 @@ void sendMsg(Client* client, Request* header) {
         .packet_len = 0
     };
     response_hton(&resp);
-    pbwrite(&client->pb, &resp, sizeof(resp));
-    pbflush(&client->pb, client);
+    client_write(client, &resp, sizeof(resp));
     return;
 err_read:
     free(msg);
@@ -200,7 +196,7 @@ void getMsgsBefore(Client* client, Request* header) {
     // TODO: send some error here:
     if(header->packet_len != sizeof(MessagesBeforePacket)) return;
     MessagesBeforePacket packet;
-    int n = client_read_(client, &packet, sizeof(packet));
+    int n = client_read(client, &packet, sizeof(packet));
     // TODO: send some error here:
     if(n < 0 || n == 0) goto err_read0;
     messagesBeforePacket_ntoh(&packet);
@@ -225,10 +221,9 @@ void getMsgsBefore(Client* client, Request* header) {
         };
         response_hton(&resp);
         messagesBeforeResponse_hton(&msg_resp);
-        pbwrite(&client->pb, &resp, sizeof(resp));
-        pbwrite(&client->pb, &msg_resp, sizeof(msg_resp));
-        pbwrite(&client->pb, msg->content, msg->content_len);
-        pbflush(&client->pb, client);
+        client_write(client, &resp, sizeof(resp));
+        client_write(client, &msg_resp, sizeof(msg_resp));
+        client_write(client, msg->content, msg->content_len);
 
         free(msg->content);
     } 
@@ -240,8 +235,7 @@ finish:
         .packet_len = 0,
     };
     response_hton(&resp);
-    pbwrite(&client->pb, &resp, sizeof(resp));
-    pbflush(&client->pb, client);
+    client_write(client, &resp, sizeof(resp));
 err_read0:
     return;
 }

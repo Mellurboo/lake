@@ -32,8 +32,7 @@ void client_thread(void* fd_void) {
     Request req_header;
     Response res_header;
     for(;;) {
-        client_discard_read_buf(&client);
-        int n = client_read_(&client, &req_header, sizeof(req_header));
+        int n = client_read(&client, &req_header, sizeof(req_header));
         if(n < 0) break;
         if(n == 0) break;
         request_ntoh(&req_header);
@@ -43,8 +42,7 @@ void client_thread(void* fd_void) {
             res_header.opcode = -ERROR_INVALID_PROTOCOL_ID;
             res_header.packet_len = 0;
             response_hton(&res_header);
-            pbwrite(&client.pb, &res_header, sizeof(res_header));
-            pbflush(&client.pb, &client);
+            client_write(&client, &res_header, sizeof(res_header));
             continue;
         }
         Protocol* proto = protocols[req_header.protocol_id];
@@ -54,8 +52,7 @@ void client_thread(void* fd_void) {
             res_header.opcode = -ERROR_INVALID_FUNC_ID;
             res_header.packet_len = 0;
             response_hton(&res_header);
-            pbwrite(&client.pb, &res_header, sizeof(res_header));
-            pbflush(&client.pb, &client);
+            client_write(&client, &res_header, sizeof(res_header));
             continue;
         }
 
@@ -65,8 +62,7 @@ void client_thread(void* fd_void) {
             res_header.opcode = -ERROR_NOT_AUTH;
             res_header.packet_len = 0;
             response_hton(&res_header);
-            pbwrite(&client.pb, &res_header, sizeof(res_header));
-            pbflush(&client.pb, &client);
+            client_write(&client, &res_header, sizeof(res_header));
             continue;
         }
 
@@ -75,7 +71,6 @@ void client_thread(void* fd_void) {
     }
     list_remove(&client.list);
     closesocket(client.fd);
-    free(client.pb.items);
     info("%d: Disconnected!", client.fd);
 }
 #define PORT 6969

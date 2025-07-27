@@ -3,7 +3,6 @@
 #include "request.h"
 #include "response.h"
 #include "client.h"
-#include "pb.h"
 
 void notify(Client* client, Request* header) {
     // TODO: send some error here:
@@ -15,8 +14,7 @@ void notify(Client* client, Request* header) {
         .packet_len = 0,
     };
     response_hton(&resp);
-    pbwrite(&client->pb, &resp, sizeof(resp));
-    pbflush(&client->pb, client);
+    client_write(client, &resp, sizeof(resp));
 }
 protocol_func_t notifyProtocolFuncs[] = {
     notify,
