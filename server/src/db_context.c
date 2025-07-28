@@ -192,14 +192,14 @@ int DbContext_send_msg(DbContext* db, uint32_t server_id, uint32_t channel_id, u
     //TODO: we assert its DMs
     assert(false && "TODO: everything other than DMs");
 }
-int DbContext_get_msgs_before(DbContext* db, uint32_t server_id, uint32_t channel_id, uint32_t author_id, uint64_t milis, Messages* msgs){
+int DbContext_get_msgs_before(DbContext* db, uint32_t server_id, uint32_t channel_id, uint32_t author_id, uint64_t milis, uint32_t limit, Messages* msgs){
     if(server_id == 0){
         uint32_t max_user_id = author_id < channel_id ? channel_id : author_id;
         uint32_t min_user_id = author_id < channel_id ? author_id : channel_id;
 
         sqlite3_stmt *stmt;
         char buf[255] = {0};
-        snprintf(buf, sizeof(buf), "select author_id, milis, content from dm_%u_%u where milis < %lu",min_user_id, max_user_id, milis);
+        snprintf(buf, sizeof(buf), "select author_id, milis, content from dm_%u_%u where milis < %lu limit %u",min_user_id, max_user_id, milis, limit);
         int e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
         if(e != SQLITE_OK) return -1;
 
@@ -222,4 +222,46 @@ int DbContext_get_msgs_before(DbContext* db, uint32_t server_id, uint32_t channe
     //TODO: we assert its DMs
     assert(false && "TODO: everything other than DMs");
     return 0;
+}
+int DbContext_get_channels(DbContext* db, uint32_t server_id, uint32_t author_id, Channels* channels) {
+    if(server_id == 0) {
+        char buf[255] = { 0 };
+        snprintf(buf, sizeof(buf), "select * from dms where min_user_id = %u or max_user_id = %u", author_id, author_id);
+        sqlite3_stmt *stmt;
+        int e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
+        if(e != SQLITE_OK) return -1;
+        channels->len = 0;
+        while(sqlite3_step(stmt) == SQLITE_ROW) {
+            Channel channel = { 0 };
+            uint32_t min_user_id = sqlite3_column_int(stmt, 0);
+            uint32_t max_user_id = sqlite3_column_int(stmt, 1);
+            channel.id = min_user_id == author_id ? max_user_id : min_user_id;
+            channel.name = NULL;
+            da_push(channels, channel);
+        }
+        sqlite3_finalize(stmt);
+        for(size_t i = 0; i < channels->len; ++i) {
+            uint32_t id = channels->items[i].id;
+            e = DbContext_get_username_from_user_id(db, id, &channels->items[i].name);
+            if(e < 0) return -1;
+            if(channels->items[i].name == NULL) return -1;
+            fprintf(stderr, "Okay got username: `%s`\n", channels->items[i].name);
+        }
+        return 0;
+    }
+    fprintf(stderr, "Get it for %u\n", server_id);
+    //TODO: we assert its DMs
+    assert(false && "TODO: everything other than DMs");
+    return 0;
+}
+void free_channel(Channel* channel) {
+    free(channel->name);
+    memset(channel, 0, sizeof(*channel));
+}
+void free_channels(Channels* channels) {
+    for(size_t i = 0; i < channels->len; ++i) {
+        free_channel(&channels->items[i]);
+    }
+    free(channels->items);
+    memset(channels, 0, sizeof(*channels));
 }

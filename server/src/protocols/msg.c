@@ -203,7 +203,7 @@ void getMsgsBefore(Client* client, Request* header) {
     uint64_t milis = (((uint64_t)packet.milis_high) << 32) | (uint64_t)packet.milis_low;
 
     Messages msgs = {0};
-    int e = DbContext_get_msgs_before(db, packet.server_id, packet.channel_id, client->userID, milis, &msgs);
+    int e = DbContext_get_msgs_before(db, packet.server_id, packet.channel_id, client->userID, milis, packet.count, &msgs);
     //TODO: send some error here:
     if(e < 0) goto finish;
 
