@@ -39,7 +39,7 @@ struct DbContext{
 };
 
 int DbContext_init(DbContext** dbOut){
-   DbContext* db = calloc(sizeof(DbContext), 1);
+   DbContext* db = calloc(1, sizeof(DbContext));
    int e = sqlite3_open("database.db",&db->db);
    if(e != SQLITE_OK) return -1;
    e = execute_sql(db->db, "create table if not exists public_keys(key blob, user_id INTEGER, PRIMARY KEY(key), FOREIGN KEY(user_id) REFERENCES users(id));");
