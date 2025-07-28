@@ -386,7 +386,6 @@ int main(int argc, const char** argv) {
             e = client_read(&client, &resp, sizeof(resp));
             assert(e == 1);
             response_ntoh(&resp);
-            fprintf(stderr, "resp.packet_id: %u packet_len: %u\n", resp.packet_id, resp.packet_len);
             assert(resp.packet_id == 69);
             assert(resp.packet_len < 1024);
             if(resp.packet_len == 0) break;
