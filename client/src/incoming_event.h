@@ -5,11 +5,12 @@
 #include "msg.h"
 
 #define MAX_INCOMING_EVENTS 128
+typedef struct Channels Channels;
 typedef struct IncomingEvent IncomingEvent;
 typedef struct { Messages* msgs; Message msg; } OnMessage;
 typedef struct { Messages* msgs; } OnNotification;
 typedef struct { UserMapBucket* user; } OnUserInfo;
-typedef struct { uint32_t bogus_amogus; } OnGetChannels;
+typedef struct { Channels* channels; } OnGetChannels;
 typedef void (*event_handler_t)(Client* client, Response* response, IncomingEvent* event);
 struct IncomingEvent {
     event_handler_t onEvent;

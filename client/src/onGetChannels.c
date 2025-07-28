@@ -6,6 +6,8 @@
 #include "darray.h"
 #include <assert.h>
 #include <arpa/inet.h>
+#include "channel.h"
+#include "redraw.h"
 
 void onGetChannels(Client* client, Response* response, IncomingEvent* event) {
     (void)client;
@@ -20,6 +22,11 @@ void onGetChannels(Client* client, Response* response, IncomingEvent* event) {
     id = ntohl(id);
     char* name = calloc(response->packet_len - sizeof(id) + 1, sizeof(char));
     client_read(client, name, response->packet_len - sizeof(id));
-    fprintf(stderr, "We got channel %u `%s`\n", id, name);
-    free(name);
+    // fprintf(stderr, "We got channel %u `%s`\n", id, name);
+    Channel channel = {
+        .id = id,
+        .name = name
+    };
+    da_push(event->as.onGetChannels.channels, channel);
+    redraw();
 }

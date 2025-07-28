@@ -30,6 +30,7 @@
 #include "sendMsgRequest.h"
 #include "messagesBefore.h"
 #include "get_author_name.h"
+#include "channel.h"
 
 #ifdef _WIN32
 #else
@@ -156,6 +157,7 @@ typedef struct {
     const char** items;
     size_t len, cap;
 } TabLabels;
+Channels dm_channels = { 0 };
 TabLabels tab_labels = { 0 };
 void redraw(void) {
     for(size_t y = 0; y < term_height; ++y) {
@@ -178,9 +180,10 @@ void redraw(void) {
             }
             break;
         case TAB_LIST_STATE_DMS:
-            da_push(&tab_labels, "f1l1p");
-            da_push(&tab_labels, "bogus");
-            da_push(&tab_labels, "amogus");
+            da_reserve(&tab_labels, dm_channels.len);
+            for(size_t i = 0; i < dm_channels.len; ++i) {
+                da_push(&tab_labels, dm_channels.items[i].name);
+            }
             break;
         }
         UIBox tab_list_inner = uibox_inner(tab_list_box);
@@ -558,6 +561,7 @@ int main(int argc, const char** argv) {
             .packet_id = allocate_incoming_event(),
             .packet_len = sizeof(server_id),
         };
+        incoming_events[req.packet_id].as.onGetChannels.channels = &dm_channels; 
         incoming_events[req.packet_id].onEvent = onGetChannels; 
         request_hton(&req);
         client_write(&client, &req, sizeof(Request));
