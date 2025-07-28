@@ -17,6 +17,35 @@
 extern DbContext* db;
 extern UserMap user_map;
 
+const char* authModes[] = {
+    "KB786-AES256CTR",
+};
+void authListModes(Client* client, Request* header) {
+    // TODO: send some error here:
+    if(header->packet_len != 0) return;
+    for(size_t i = 0; i < sizeof(authModes)/sizeof(*authModes); ++i) {
+        Response resp = {
+            .packet_id = header->packet_id,
+            .opcode = 0,
+            .packet_len = sizeof(uint32_t) + strlen(authModes[i]) 
+        };
+        response_hton(&resp);
+        client_write(client, &resp, sizeof(resp));
+        uint32_t id = i + 1;
+        id = htonl(id);
+        client_write(client, &id, sizeof(id));
+        char buf[100];
+        strncpy(buf, authModes[i], sizeof(buf));
+        client_write(client, buf, strlen(buf));
+    }
+    Response resp = {
+        .packet_id = header->packet_id,
+        .opcode = 0,
+        .packet_len = 0 
+    };
+    response_hton(&resp);
+    client_write(client, &resp, sizeof(resp));
+}
 // FIXME: all these fucking memory leaks :(((
 void authAuthenticate(Client* client, Request* header){
     // TODO: send some error here:
@@ -95,6 +124,7 @@ void authAuthenticate(Client* client, Request* header){
     client->secure = true;
 }
 protocol_func_t authProtocolFuncs[] = {
+    authListModes,
     authAuthenticate,
 };
 Protocol authProtocol = PROTOCOL("auth", authProtocolFuncs);

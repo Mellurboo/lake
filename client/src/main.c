@@ -253,6 +253,10 @@ void register_signals(void) {
 #endif
 }
 
+typedef struct {
+    uint32_t id;
+    char name[];
+} Auth;
 int main(int argc, const char** argv) {
     register_signals();
     gtinit();
@@ -367,8 +371,40 @@ int main(int argc, const char** argv) {
     uint32_t userID = 0;
     if(auth_protocol_id) {
         printf("Server requires auth\n");
-        fflush(stdout);
+        // List the supported authentication/encryption modes
+        Request req = {
+            .protocol_id = auth_protocol_id,
+            .func_id = 0,
+            .packet_id = 69,
+            .packet_len = 0 
+        };
+        request_hton(&req);
+        client_write(&client, &req, sizeof(req));
+        uint32_t kyber_id = 0;
+        const char* kyber_name = "KB786-AES256CTR";
+        for(;;) {
+            e = client_read(&client, &resp, sizeof(resp));
+            assert(e == 1);
+            response_ntoh(&resp);
+            fprintf(stderr, "resp.packet_id: %u packet_len: %u\n", resp.packet_id, resp.packet_len);
+            assert(resp.packet_id == 69);
+            assert(resp.packet_len < 1024);
+            if(resp.packet_len == 0) break;
 
+            assert(resp.packet_len >= sizeof(uint32_t));
+            size_t name_len = resp.packet_len - sizeof(uint32_t);
+            Auth* auth = malloc(resp.packet_len + 1);
+            assert(client_read(&client, auth, resp.packet_len) == 1);
+            auth->id = ntohl(auth->id);
+            auth->name[name_len] = '\0';
+            fprintf(stderr, "INFO: Auth algorithm supported %u %s\n", auth->id, auth->name);
+            if(strcmp(auth->name, kyber_name) == 0) kyber_id = auth->id;
+            free(auth);
+        }
+
+        if(!kyber_id) {
+            fprintf(stderr, "FATAL: Server does not support %s\n", kyber_name);
+        }
         if(public_key_name[0] != 0){
             size_t read_size = 0;
             pk = (uint8_t*)read_entire_file(public_key_name, &read_size);
@@ -387,9 +423,9 @@ int main(int argc, const char** argv) {
             }
         }
 
-        Request req = {
+        req = (Request) {
             .protocol_id = auth_protocol_id,
-            .func_id = 0,
+            .func_id = kyber_id,
             .packet_id = packet_id++,
             .packet_len = KYBER_PUBLICKEYBYTES
         };
@@ -417,7 +453,7 @@ int main(int argc, const char** argv) {
 
         req = (Request){
             .protocol_id = auth_protocol_id,
-            .func_id = 0,
+            .func_id = kyber_id,
             .packet_id = packet_id++,
             .packet_len = 16
         };
