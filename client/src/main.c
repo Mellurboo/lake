@@ -11,6 +11,24 @@
 #include "fileutils.h"
 #include "post_quantum_cryptography.h"
 #include <stdbool.h>
+#include "client.h"
+#include "time_unix.h"
+#include "user_map.h"
+#include "request.h"
+#include "response.h"
+#include "uibox.h"
+#include "protocol.h"
+#include "msg.h"
+#include "notification.h"
+#include "redraw.h"
+#include "incoming_event.h"
+#include "onUserInfo.h"
+#include "onOkMessage.h"
+#include "onNotification.h"
+#include "getUserInfoPacket.h"
+#include "sendMsgRequest.h"
+#include "messagesBefore.h"
+#include "get_author_name.h"
 
 #ifdef _WIN32
 #else
@@ -20,232 +38,11 @@
 #define ALIGN16(n) (((n) + 15) & ~15)
 #define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 
-uint64_t time_unix_milis(void) {
-#ifdef _WIN32
-    // TODO: bruvsky pls implement this for binbows opewating system for video james
-    return 0;
-#else
-    struct timespec now;
-    timespec_get(&now, TIME_UTC);
-    return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
-#endif
-}
-
-typedef struct UserMapBucket UserMapBucket;
-struct UserMapBucket {
-    UserMapBucket* next;
-    uint32_t user_id;
-    char* username;
-    bool in_progress;
-};
-typedef struct {
-    struct {
-        UserMapBucket** items;
-        size_t len;
-    } buckets;
-    size_t len;
-} UserMap;
-bool user_map_reserve(UserMap* map, size_t extra) {
-    if(map->len + extra > map->buckets.len) {
-        size_t ncap = map->buckets.len*2 + extra;
-        UserMapBucket** newbuckets = malloc(sizeof(*newbuckets)*ncap);
-        if(!newbuckets) return false;
-        memset(newbuckets, 0, sizeof(*newbuckets) * ncap);
-        for(size_t i = 0; i < map->buckets.len; ++i) {
-            UserMapBucket* oldbucket = map->buckets.items[i];
-            while(oldbucket) {
-                UserMapBucket* next = oldbucket->next;
-                size_t hash = ((size_t)oldbucket->user_id) % ncap;
-                UserMapBucket* newbucket = newbuckets[hash];
-                oldbucket->next = newbucket;
-                newbuckets[hash] = oldbucket;
-                oldbucket = next;
-            }
-        }
-        free(map->buckets.items);
-        map->buckets.items = newbuckets;
-        map->buckets.len = ncap;
-    }
-    return true;
-}
-UserMapBucket* user_map_insert(UserMap* map, uint32_t user_id) {
-    if(!user_map_reserve(map, 1)) return NULL;
-    size_t hash = ((size_t)user_id) % map->buckets.len;
-    UserMapBucket* into = map->buckets.items[hash];
-    UserMapBucket* bucket = calloc(sizeof(UserMapBucket), 1);
-    if(!bucket) return NULL;
-    bucket->next = into;
-    bucket->user_id = user_id;
-    map->buckets.items[hash] = bucket;
-    map->len++;
-    return bucket;
-}
-UserMapBucket* user_map_get(UserMap* map, uint32_t user_id) {
-    if(map->len == 0) return NULL;
-    assert(map->buckets.len > 0);
-    size_t hash = ((size_t)user_id) % map->buckets.len;
-    UserMapBucket* bucket = map->buckets.items[hash];
-    while(bucket) {
-        if(bucket->user_id == user_id) return bucket;
-        bucket = bucket->next;
-    }
-    return NULL;
-}
-UserMapBucket* user_map_get_or_insert(UserMap* map, uint32_t user_id) {
-    UserMapBucket* bucket = user_map_get(map, user_id);
-    if(bucket) return bucket;
-    return user_map_insert(map, user_id);
-}
-static UserMap user_map = { 0 };
-
-typedef struct {
-    uint32_t userID;
-} GetUserInfoPacket;
-void getUserInfoPacket_hton(GetUserInfoPacket* packet){
-    packet->userID = htonl(packet->userID);
-}
-
-typedef struct {
-    uint32_t protocol_id;
-    uint32_t func_id;
-    uint32_t packet_id;
-    uint32_t packet_len;
-} Request;
-void request_hton(Request* req) {
-    req->protocol_id = htonl(req->protocol_id);
-    req->func_id = htonl(req->func_id);
-    req->packet_id = htonl(req->packet_id);
-    req->packet_len = htonl(req->packet_len);
-}
-typedef struct {
-    uint32_t server_id;
-    uint32_t channel_id;
-} SendMsgRequest;
-void sendMsgRequest_hton(SendMsgRequest* packet) {
-    packet->server_id = htonl(packet->server_id);
-    packet->channel_id = htonl(packet->channel_id);
-}
-typedef struct {
-    int fd;
-    uint32_t userID;
-    uint32_t notifyID;
-
-    bool secure;
-    struct AES_ctx aes_ctx_read;
-    struct AES_ctx aes_ctx_write;
-} Client;
-static intptr_t gtread_exact(Client* client, void* buf, size_t size) {
-    while(size) {
-        gtblockfd(client->fd, GTBLOCKIN);
-        intptr_t e = recv(client->fd, buf, size, 0);
-        if(e < 0) return e;
-        if(e == 0) return 0; 
-        buf = ((char*)buf) + (size_t)e;
-        size -= (size_t)e;
-    }
-    return 1;
-}
-static intptr_t gtwrite_exact(int fd, const void* buf, size_t size) {
-    while(size) {
-        gtblockfd(fd, GTBLOCKOUT);
-        intptr_t e = send(fd, buf, size, 0);
-        if(e < 0) return e;
-        if(e == 0) return 0; 
-        buf = ((char*)buf) + (size_t)e;
-        size -= (size_t)e;
-    }
-    return 1;
-}
-
-intptr_t client_read(Client* client, void* buf, size_t size) {
-    intptr_t e = gtread_exact(client, buf, size);
-    if (!client->secure || e <= 0) return e;
-    AES_CTR_xcrypt_buffer(&client->aes_ctx_read, buf, size);
-    return 1;
-}
-
-static intptr_t client_write(Client* client, void* buf, size_t size) {
-    if (client->secure) AES_CTR_xcrypt_buffer(&client->aes_ctx_write, buf, size);
-    return gtwrite_exact(client->fd, buf, size);
-}
-
+UserMap user_map = { 0 };
 Client client = {0};
-typedef struct {
-    uint32_t server_id;
-    uint32_t channel_id;
-    uint32_t milis_low;
-    uint32_t milis_high;
-    uint32_t count;
-} MessagesBeforeRequest;
-void messagesBeforeRequest_hton(MessagesBeforeRequest* packet) {
-    packet->server_id = htonl(packet->server_id);
-    packet->channel_id = htonl(packet->channel_id);
-    packet->milis_low = htonl(packet->milis_low);
-    packet->milis_high = htonl(packet->milis_high);
-    packet->count = htonl(packet->count);
-}
-typedef struct {
-    uint32_t author_id;
-    uint32_t milis_low;
-    uint32_t milis_high;
-    /*content[packet_len - sizeof(MessagesBeforeResponse)]*/
-} MessagesBeforeResponse;
-void messagesBeforeResponse_ntoh(MessagesBeforeResponse* packet) {
-    packet->author_id = ntohl(packet->author_id);
-    packet->milis_low = ntohl(packet->milis_low);
-    packet->milis_high = ntohl(packet->milis_high);
-}
 // Generic response header
-typedef struct {
-    uint32_t packet_id;
-    uint32_t opcode;
-    uint32_t packet_len;
-} Response;
-void response_ntoh(Response* res) {
-    res->packet_id = ntohl(res->packet_id);
-    res->opcode = ntohl(res->opcode);
-    res->packet_len = ntohl(res->packet_len);
-}
-typedef struct {
-    uint32_t id;
-    char name[];
-} Protocol;
 #define PORT 6969
-typedef struct {
-    uint64_t milis;
-    uint32_t author_id;
-    uint32_t content_len;
-    char* content;
-} Message;
 
-typedef struct {
-    uint16_t l, t, r, b;
-} UIBox;
-void uibox_draw_border(UIBox box, int tb, int lr, int corner) {
-    stui_window_border(box.l, box.t, box.r - box.l, box.b - box.t, tb, lr, corner);
-}
-// The box that represents the content that would go within the border
-inline UIBox uibox_inner(UIBox box) {
-    return (UIBox){box.l + 1, box.t + 1, box.r - 1, box.b - 1};
-}
-inline UIBox uibox_chop_left(UIBox* box, uint16_t n) {
-    uint16_t l = box->l;
-    box->l += n;
-    return (UIBox){l, box->t, box->l, box->b };
-}
-inline UIBox uibox_chop_bottom(UIBox* box, uint16_t n) {
-    uint16_t b = box->b;
-    box->b -= n;
-    return (UIBox){box->l, box->b, box->r, b };
-}
-
-
-typedef struct {
-    Message* items;
-    size_t len, cap;
-} Messages;
-
-char* get_author_name(Client* client, uint32_t author_id);
 void render_messages(Client* client, UIBox box, Messages* msgs) {
     size_t box_width = box.r - box.l;
     int32_t y_offset_start = box.b - box.t + 1;
@@ -301,83 +98,10 @@ typedef struct {
     char* items;
     size_t len, cap;
 } StringBuilder;
-typedef struct IncomingEvent IncomingEvent;
-typedef void (*event_handler_t)(Client* client, Response* response, IncomingEvent* event);
-struct IncomingEvent {
-    event_handler_t onEvent;
-    union {
-        struct { Messages* msgs; Message msg; } onMessage;
-        struct { Messages* msgs; } onNotification;
-        struct { UserMapBucket* user; } onUserInfo;
-    } as;
-};
-#define MAX_INCOMING_EVENTS 128
-static IncomingEvent incoming_events[MAX_INCOMING_EVENTS];
-size_t allocate_incoming_event(void) {
-    for(;;) {
-        for(size_t i = 0; i < MAX_INCOMING_EVENTS; ++i) {
-            if(!incoming_events[i].onEvent) return i;
-        }
-        // TODO: we should introduce gtsemaphore
-        // that way we can notify on event completion
-        // and wait for it in the green threads
-        gtyield();
-    }
-    // unreachable
-    // return ~0;
-}
+IncomingEvent incoming_events[MAX_INCOMING_EVENTS];
 
 uint32_t user_protocol_id = 0;
-void redraw(void);
-void onUserInfo(Client* client, Response* response, IncomingEvent* event) {
-    event->onEvent = NULL;
-    UserMapBucket* user = event->as.onUserInfo.user;
-    // NOTE: not entirely necessary but who cares
-    // readability I guess
-    user->in_progress = false;
-    if(response->packet_len == 0) {
-        user->username = "BOGUS";
-        return;
-    }
-    if(response->packet_len > 128) {
-        user->username = "<Too long>";
-        // FIXME: discard packet data on here
-        return;
-    }
-    user->username = calloc(response->packet_len + 1, 1);
-    int e = client_read(client, user->username, response->packet_len);
-    (void)e;
-    redraw();
-}
 //TODO: getting info from db doesnt work during MessagesBeforePacket idk what about during notifications
-char* get_author_name(Client* client, uint32_t author_id){
-    UserMapBucket* user = user_map_get_or_insert(&user_map, author_id);
-
-    if(user->username == NULL && !user->in_progress) {
-        if(user_protocol_id == 0) return NULL;
-        GetUserInfoPacket packet = {
-            .userID = author_id
-        };
-
-        getUserInfoPacket_hton(&packet);
-        user->in_progress = true;
-        Request request = {
-            .protocol_id = user_protocol_id,
-            .func_id = 0,
-            .packet_id = allocate_incoming_event(),
-            .packet_len = sizeof(GetUserInfoPacket)
-        };
-        incoming_events[request.packet_id].as.onUserInfo.user = user;
-        incoming_events[request.packet_id].onEvent = onUserInfo;
-
-        request_hton(&request);
-        client_write(client, &request, sizeof(Request));
-        client_write(client, &packet, sizeof(packet));
-        // TODO: error here?
-    }
-
-    return user->username;
-}
 
 void reader_thread(void* client_void) {
     Client* client = client_void;
@@ -401,57 +125,7 @@ void reader_thread(void* client_void) {
     exit(1);
 }
 
-void redraw(void);
-void okOnMessage(Client* client, Response* response, IncomingEvent* event) {
-    (void)client;
-    (void)response;
-    da_push(event->as.onMessage.msgs, event->as.onMessage.msg);
-    event->onEvent = NULL;
-    redraw();
-}
-typedef struct {
-    uint32_t server_id;
-    uint32_t channel_id;
-    uint32_t author_id;
-    uint32_t milis_low;
-    uint32_t milis_high;
-} Notification;
-void notification_ntoh(Notification* packet) {
-    packet->server_id = ntohl(packet->server_id);
-    packet->channel_id = ntohl(packet->channel_id);
-    packet->author_id = ntohl(packet->author_id);
-    packet->milis_low = ntohl(packet->milis_low);
-    packet->milis_high = ntohl(packet->milis_high);
-}
 uint32_t dming;
-void onNotification(Client* client, Response* response, IncomingEvent* event) {
-    // SKIP
-    if(response->packet_len == 0) return;
-    assert(response->opcode == 0);
-    assert(response->packet_len > sizeof(Notification));
-    Notification notif;
-    // TODO: error check
-    client_read(client, &notif, sizeof(notif));
-    notification_ntoh(&notif);
-    size_t content_len = response->packet_len - sizeof(Notification);
-    char* content = malloc(content_len);
-    // TODO: error check
-    client_read(client, content, content_len);
-
-    if(notif.server_id != 0 || notif.channel_id != dming) {
-        free(content);
-        return;
-    }
-    uint64_t milis = (((uint64_t)notif.milis_high) << 32) | (uint64_t)notif.milis_low;
-    Message msg = {
-        .content_len = content_len,
-        .content = content,
-        .milis = milis,
-        .author_id = notif.author_id,
-    };
-    da_push(event->as.onNotification.msgs, msg);
-    redraw();
-}
 Messages msgs;
 size_t term_width, term_height;
 StringBuilder prompt = { 0 };
@@ -575,8 +249,6 @@ void register_signals(void) {
     signal(SIGWINCH, _interrupt_handler_resize);
 #endif
 }
-
-
 
 int main(int argc, const char** argv) {
     register_signals();

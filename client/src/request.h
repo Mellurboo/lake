@@ -1,0 +1,11 @@
+#pragma once
+
+#include <stdint.h>
+
+typedef struct {
+    uint32_t protocol_id;
+    uint32_t func_id;
+    uint32_t packet_id;
+    uint32_t packet_len;
+} Request;
+void request_hton(Request* req);
