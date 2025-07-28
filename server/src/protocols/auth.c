@@ -39,13 +39,14 @@ void authAuthenticate(Client* client, Request* header){
     
     crypto_kem_enc(ct, ss, pk);
 
-    AES_init_ctx(&client->aes_ctx, ss);
+    AES_init_ctx(&client->aes_ctx_read, ss);
+    AES_init_ctx(&client->aes_ctx_write, ss);
     free(ss);
 
     uint8_t* randBytes = calloc(RAND_COUNT, 1);
     randombytes(randBytes, RAND_COUNT);
     memcpy(ct + KYBER_CIPHERTEXTBYTES, randBytes, RAND_COUNT);
-    AES_CTR_xcrypt_buffer(&client->aes_ctx, ct + KYBER_CIPHERTEXTBYTES, RAND_COUNT);
+    AES_CTR_xcrypt_buffer(&client->aes_ctx_write, ct + KYBER_CIPHERTEXTBYTES, RAND_COUNT);
 
     Response test = {
         .packet_id = header->packet_id,

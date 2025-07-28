@@ -11,7 +11,8 @@ typedef struct Client {
     uint32_t notifyID;
 
     bool secure;
-    struct AES_ctx aes_ctx;
+    struct AES_ctx aes_ctx_write;
+    struct AES_ctx aes_ctx_read;
 } Client;
 intptr_t client_read(Client* client, void* buf, size_t size);
 intptr_t client_write(Client* client, void* buf, size_t size);

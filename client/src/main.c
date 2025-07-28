@@ -131,7 +131,8 @@ typedef struct {
     uint32_t notifyID;
 
     bool secure;
-    struct AES_ctx aes_ctx;
+    struct AES_ctx aes_ctx_read;
+    struct AES_ctx aes_ctx_write;
 } Client;
 static intptr_t gtread_exact(Client* client, void* buf, size_t size) {
     while(size) {
@@ -159,14 +160,12 @@ static intptr_t gtwrite_exact(int fd, const void* buf, size_t size) {
 intptr_t client_read(Client* client, void* buf, size_t size) {
     intptr_t e = gtread_exact(client, buf, size);
     if (!client->secure || e <= 0) return e;
-    memset(client->aes_ctx.Iv, 0, AES_BLOCKLEN);
-    AES_CTR_xcrypt_buffer(&client->aes_ctx, buf, size);
+    AES_CTR_xcrypt_buffer(&client->aes_ctx_read, buf, size);
     return 1;
 }
 
 static intptr_t client_write(Client* client, void* buf, size_t size) {
-    if (client->secure) memset(client->aes_ctx.Iv, 0, AES_BLOCKLEN);
-    if (client->secure) AES_CTR_xcrypt_buffer(&client->aes_ctx, buf, size);
+    if (client->secure) AES_CTR_xcrypt_buffer(&client->aes_ctx_write, buf, size);
     return gtwrite_exact(client->fd, buf, size);
 }
 
@@ -732,10 +731,11 @@ int main(int argc, const char** argv) {
 
         uint8_t* ss = calloc(KYBER_SSBYTES, 1);
         crypto_kem_dec(ss, cipherData, sk);
-        AES_init_ctx(&client.aes_ctx, ss);
+        AES_init_ctx(&client.aes_ctx_read, ss);
+        AES_init_ctx(&client.aes_ctx_write, ss);
         free(ss);
 
-        AES_CTR_xcrypt_buffer(&client.aes_ctx, cipherData + KYBER_CIPHERTEXTBYTES, 16);
+        AES_CTR_xcrypt_buffer(&client.aes_ctx_read, cipherData + KYBER_CIPHERTEXTBYTES, 16);
 
         req = (Request){
             .protocol_id = auth_protocol_id,
