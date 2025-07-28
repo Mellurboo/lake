@@ -138,7 +138,7 @@ enum {
     TAB_CATEGORY_SERVERS,
     TAB_CATEGORIES_COUNT
 };
-static_assert(TAB_CATEGORIES_COUNT == 3);
+static_assert(TAB_CATEGORIES_COUNT == 3, "Update tab category labels");
 const char* tab_category_labels[] = {
     [TAB_CATEGORY_DMS] = "DMS",
     [TAB_CATEGORY_GROUP_CHATS] = "Group Chats",
