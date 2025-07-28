@@ -25,6 +25,7 @@
 #include "onUserInfo.h"
 #include "onOkMessage.h"
 #include "onNotification.h"
+#include "onGetChannels.h"
 #include "getUserInfoPacket.h"
 #include "sendMsgRequest.h"
 #include "messagesBefore.h"
@@ -330,6 +331,8 @@ int main(int argc, const char** argv) {
     uint32_t msg_protocol_id = 0;
 
     uint32_t notify_protocol_id = 0;
+
+    uint32_t channel_protocol_id = 0;
     for(;;) {
         e = client_read(&client, &resp, sizeof(resp));
         assert(e == 1);
@@ -354,6 +357,7 @@ int main(int argc, const char** argv) {
         if(strcmp(protocol->name, "msg")  == 0) msg_protocol_id = protocol->id; 
         if(strcmp(protocol->name, "notify") == 0) notify_protocol_id = protocol->id;
         if(strcmp(protocol->name, "user") == 0) user_protocol_id = protocol->id;
+        if(strcmp(protocol->name, "channel") == 0) channel_protocol_id = protocol->id;
         free(protocol);
     }
     if(!msg_protocol_id) {
@@ -510,6 +514,20 @@ int main(int argc, const char** argv) {
         };
         request_hton(&req);
         client_write(&client, &req, sizeof(Request));
+    }
+    if(channel_protocol_id) {
+        uint32_t server_id = 0;
+        Request req = {
+            .protocol_id = channel_protocol_id,
+            .func_id = 0,
+            .packet_id = allocate_incoming_event(),
+            .packet_len = sizeof(server_id),
+        };
+        incoming_events[req.packet_id].onEvent = onGetChannels; 
+        request_hton(&req);
+        client_write(&client, &req, sizeof(Request));
+        server_id = htonl(server_id);
+        client_write(&client, &server_id, sizeof(server_id));
     }
     for(;;) {
         redraw();

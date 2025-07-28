@@ -4,6 +4,7 @@
 #include "onUserInfo.h"
 #include "request.h"
 #include "getUserInfoPacket.h"
+#include <stdio.h>
 
 extern UserMap user_map;
 extern int user_protocol_id;
@@ -27,7 +28,6 @@ char* get_author_name(Client* client, uint32_t author_id){
         };
         incoming_events[request.packet_id].as.onUserInfo.user = user;
         incoming_events[request.packet_id].onEvent = onUserInfo;
-
         request_hton(&request);
         client_write(client, &request, sizeof(Request));
         client_write(client, &packet, sizeof(packet));

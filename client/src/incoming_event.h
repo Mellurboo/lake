@@ -9,6 +9,7 @@ typedef struct IncomingEvent IncomingEvent;
 typedef struct { Messages* msgs; Message msg; } OnMessage;
 typedef struct { Messages* msgs; } OnNotification;
 typedef struct { UserMapBucket* user; } OnUserInfo;
+typedef struct { uint32_t bogus_amogus; } OnGetChannels;
 typedef void (*event_handler_t)(Client* client, Response* response, IncomingEvent* event);
 struct IncomingEvent {
     event_handler_t onEvent;
@@ -16,6 +17,7 @@ struct IncomingEvent {
         OnMessage onMessage;
         OnNotification onNotification;
         OnUserInfo onUserInfo;
+        OnGetChannels onGetChannels;
     } as;
 };
 
