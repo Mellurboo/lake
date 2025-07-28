@@ -113,9 +113,11 @@ void reader_thread(void* client_void) {
         response_ntoh(&resp);
         // TODO: skip resp.len amount maybe?
         if(resp.packet_id >= MAX_INCOMING_EVENTS) {
+            fprintf(stderr, "Bogus amogus packet_id=%u\n", resp.packet_id);
             continue;
         }
         if(!incoming_events[resp.packet_id].onEvent) {
+            fprintf(stderr, "Unhandled bogus amogus packet_id=%u\n", resp.packet_id);
             continue;
         }
         incoming_events[resp.packet_id].onEvent(client, &resp, &incoming_events[resp.packet_id]);
