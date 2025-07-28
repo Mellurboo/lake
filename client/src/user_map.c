@@ -29,7 +29,7 @@ UserMapBucket* user_map_insert(UserMap* map, uint32_t user_id) {
     if(!user_map_reserve(map, 1)) return NULL;
     size_t hash = ((size_t)user_id) % map->buckets.len;
     UserMapBucket* into = map->buckets.items[hash];
-    UserMapBucket* bucket = calloc(sizeof(UserMapBucket), 1);
+    UserMapBucket* bucket = calloc(1, sizeof(UserMapBucket));
     if(!bucket) return NULL;
     bucket->next = into;
     bucket->user_id = user_id;
