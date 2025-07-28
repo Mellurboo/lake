@@ -91,7 +91,7 @@ void authAuthenticate(Client* client, Request* header){
     userID = htonl(userID);
     client_write(client, &userID, sizeof(userID));
 
-    // client->secure = true;
+    client->secure = true;
 }
 protocol_func_t authProtocolFuncs[] = {
     authAuthenticate,

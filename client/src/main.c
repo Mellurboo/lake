@@ -159,11 +159,13 @@ static intptr_t gtwrite_exact(int fd, const void* buf, size_t size) {
 intptr_t client_read(Client* client, void* buf, size_t size) {
     intptr_t e = gtread_exact(client, buf, size);
     if (!client->secure || e <= 0) return e;
+    memset(client->aes_ctx.Iv, 0, AES_BLOCKLEN);
     AES_CTR_xcrypt_buffer(&client->aes_ctx, buf, size);
     return 1;
 }
 
 static intptr_t client_write(Client* client, void* buf, size_t size) {
+    if (client->secure) memset(client->aes_ctx.Iv, 0, AES_BLOCKLEN);
     if (client->secure) AES_CTR_xcrypt_buffer(&client->aes_ctx, buf, size);
     return gtwrite_exact(client->fd, buf, size);
 }
@@ -757,7 +759,7 @@ int main(int argc, const char** argv) {
         assert(e == 1);
         userID = ntohl(userID);
 
-        // client.secure = true;
+        client.secure = true;
     }
     dming = ~0;
     {
