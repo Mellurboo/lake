@@ -280,11 +280,8 @@ int main(int argc, const char** argv) {
     const char* hostname = "localhost";
     uint32_t port = 6969;
 
-    char public_key_name[256] = {0};
-    char secret_key_name[256] = {0};
-    uint8_t* pk = NULL;
-    uint8_t* sk = NULL;
 
+    const char* key_name = NULL;
 
     const char* exe = shift_args(&argc, &argv);
     (void)exe;
@@ -297,9 +294,8 @@ int main(int argc, const char** argv) {
             assert(argc && "IP PLS MOTHERFUCKA");
             hostname = shift_args(&argc, &argv);
         } else if(strcmp(arg, "-key") == 0){
-            arg = shift_args(&argc, &argv);
-            snprintf(public_key_name, sizeof(public_key_name), "%s.pub", arg);
-            snprintf(secret_key_name, sizeof(secret_key_name), "%s.priv", arg);
+            assert(argc && "KEY PLS MOTHERFUCKA");
+            key_name = shift_args(&argc, &argv);
         } else {
             fprintf(stderr, "ERROR: unexpected argument `%s`\n", arg);
             return 1;
@@ -403,26 +399,27 @@ int main(int argc, const char** argv) {
             if(strcmp(auth->name, kyber_name) == 0) kyber_id = auth->id;
             free(auth);
         }
-
         if(!kyber_id) {
             fprintf(stderr, "FATAL: Server does not support %s\n", kyber_name);
+            return 1;
         }
-        if(public_key_name[0] != 0){
-            size_t read_size = 0;
-            pk = (uint8_t*)read_entire_file(public_key_name, &read_size);
-            if(read_size != KYBER_PUBLICKEYBYTES || pk == NULL){
-                fprintf(stderr, "Provide valid public key!\n");
-                return 1;
-            }
+        if(!key_name) {
+            fprintf(stderr, "Please provide a key as the server requires it!\n");
+            return 1;
         }
-
-        if(secret_key_name[0] != 0){
-            size_t read_size = 0;
-            sk = (uint8_t*)read_entire_file(secret_key_name, &read_size);
-            if(read_size != KYBER_SECRETKEYBYTES || sk == NULL){
-                fprintf(stderr, "Provide valid sekret key!\n");
-                return 1;
-            }
+        char tmp_file_name[256] = {0};
+        snprintf(tmp_file_name, sizeof(tmp_file_name), "%s.pub", key_name);
+        size_t read_size = 0;
+        uint8_t* pk = (uint8_t*)read_entire_file(tmp_file_name, &read_size);
+        if(read_size != KYBER_PUBLICKEYBYTES || pk == NULL){
+            fprintf(stderr, "Provide valid public key!\n");
+            return 1;
+        }
+        snprintf(tmp_file_name, sizeof(tmp_file_name), "%s.priv", key_name);
+        uint8_t* sk = (uint8_t*)read_entire_file(tmp_file_name, &read_size);
+        if(read_size != KYBER_SECRETKEYBYTES || sk == NULL){
+            fprintf(stderr, "Provide valid secret key!\n");
+            return 1;
         }
 
         req = (Request) {
@@ -434,18 +431,21 @@ int main(int argc, const char** argv) {
         request_hton(&req);
         client_write(&client, &req, sizeof(req));
         client_write(&client, pk, KYBER_PUBLICKEYBYTES);
-
         e = client_read(&client, &resp, sizeof(resp));
+
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.opcode == 0);
         assert(resp.packet_len == KYBER_CIPHERTEXTBYTES + 16);
         uint8_t* cipherData = calloc(KYBER_CIPHERTEXTBYTES + 16, 1);
-        
+        assert(cipherData && "Just Buy More RAM");
+
         e = client_read(&client, cipherData, KYBER_CIPHERTEXTBYTES + 16);
         assert(e == 1);
 
         uint8_t* ss = calloc(KYBER_SSBYTES, 1);
+        assert(ss && "Just Buy More RAM");
+
         crypto_kem_dec(ss, cipherData, sk);
         AES_init_ctx(&client.aes_ctx_read, ss);
         AES_init_ctx(&client.aes_ctx_write, ss);
@@ -464,18 +464,18 @@ int main(int argc, const char** argv) {
         client_write(&client, cipherData + KYBER_CIPHERTEXTBYTES, 16);
 
         free(cipherData);
-
         e = client_read(&client, &resp, sizeof(resp));
         assert(e == 1);
         response_ntoh(&resp);
         assert(resp.opcode == 0);
         assert(resp.packet_len == sizeof(uint32_t));
-
         e = client_read(&client, &userID, sizeof(uint32_t));
         assert(e == 1);
         userID = ntohl(userID);
 
         client.secure = true;
+        free(pk);
+        free(sk);
     }
     dming = ~0;
     {
