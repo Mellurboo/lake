@@ -26,6 +26,7 @@
 #include "onOkMessage.h"
 #include "onNotification.h"
 #include "onGetChannels.h"
+#include "onGetMessageBefore.h"
 #include "getUserInfoPacket.h"
 #include "sendMsgRequest.h"
 #include "messagesBefore.h"
@@ -160,6 +161,8 @@ typedef struct {
 Channels dm_channels = { 0 };
 TabLabels tab_labels = { 0 };
 void redraw(void) {
+    bool notDMING = dming == ~0u || dming == 0;
+
     for(size_t y = 0; y < term_height; ++y) {
         for(size_t x = 0; x < term_width; ++x) {
             stui_putchar(x, y, ' ');
@@ -171,7 +174,8 @@ void redraw(void) {
     UIBox tab_list_box;
     if(tab_list) {
         tab_labels.len = 0;
-        tab_list_box = uibox_chop_left(&term_box, (term_box.r - term_box.l) * 14 / 100);
+        if(notDMING) tab_list_box = term_box;
+        else tab_list_box = uibox_chop_left(&term_box, (term_box.r - term_box.l) * 14 / 100);
         uibox_draw_border(tab_list_box, '=', '|', '+');
         switch(tab_list_state) {
         case TAB_LIST_STATE_CATEGORY:
@@ -203,39 +207,44 @@ void redraw(void) {
                 label++;
             }
         }
+        stui_refresh();
+        stui_goto(uibox_inner(tab_list_box).l, uibox_inner(tab_list_box).t + tab_list_selection);
     }
-    UIBox input_box = uibox_chop_bottom(&term_box, 1);
-    uibox_draw_border(term_box, '=', '|', '+');
-    // stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
-    char buf[128];
-    char tmp_dming_name[20];
-    char* dming_name = get_author_name(&client, dming);
-    // TODO: remove code duplication somehow.
-    if(!dming_name) {
-        snprintf(tmp_dming_name, sizeof(tmp_dming_name), "User #%u", dming);
-        dming_name = tmp_dming_name;
-    }
-    snprintf(buf, sizeof(buf), "DMs: %s", dming_name);
 
-    {
-        char* str = buf;
-        size_t x = term_box.l + 2;
-        while(*str) stui_putchar(x++, 0, *str++);
+    if(!notDMING){
+        UIBox input_box = uibox_chop_bottom(&term_box, 1);
+        uibox_draw_border(term_box, '=', '|', '+');
+        // stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
+        char buf[128];
+        char tmp_dming_name[20];
+        char* dming_name = get_author_name(&client, dming);
+        // TODO: remove code duplication somehow.
+        if(!dming_name) {
+            snprintf(tmp_dming_name, sizeof(tmp_dming_name), "User #%u", dming);
+            dming_name = tmp_dming_name;
+        }
+        snprintf(buf, sizeof(buf), "DMs: %s", dming_name);
+
+        {
+            char* str = buf;
+            size_t x = term_box.l + 2;
+            while(*str) stui_putchar(x++, 0, *str++);
+        }
+        render_messages(&client, uibox_inner(term_box), &msgs);
+        stui_putchar(input_box.l + 0, term_height - 1, '>');
+        stui_putchar(input_box.l + 1, term_height - 1, ' ');
+        for(size_t i = input_box.l + input_box.l + 2; i < term_width - 1; ++i) {
+            stui_putchar(i, term_height - 1, ' ');
+        }
+        size_t i = 0;
+        for(; i < prompt.len; ++i) {
+            if(input_box.l + 2 + i >= input_box.r) continue;
+            stui_putchar(input_box.l + 2 + i, input_box.b, prompt.items[i]);
+        }
+        stui_refresh();
+        if(tab_list) stui_goto(uibox_inner(tab_list_box).l, uibox_inner(tab_list_box).t + tab_list_selection);
+        else stui_goto(input_box.l + 2 + i, input_box.b);
     }
-    render_messages(&client, uibox_inner(term_box), &msgs);
-    stui_putchar(input_box.l + 0, term_height - 1, '>');
-    stui_putchar(input_box.l + 1, term_height - 1, ' ');
-    for(size_t i = input_box.l + input_box.l + 2; i < term_width - 1; ++i) {
-        stui_putchar(i, term_height - 1, ' ');
-    }
-    size_t i = 0;
-    for(; i < prompt.len; ++i) {
-        if(input_box.l + 2 + i >= input_box.r) continue;
-        stui_putchar(input_box.l + 2 + i, input_box.b, prompt.items[i]);
-    }
-    stui_refresh();
-    if(tab_list) stui_goto(uibox_inner(tab_list_box).l, uibox_inner(tab_list_box).t + tab_list_selection);
-    else stui_goto(input_box.l + 2 + i, input_box.b);
 }
 const char* shift_args(int *argc, const char ***argv) {
     if((*argc) <= 0) return NULL;
@@ -260,6 +269,63 @@ typedef struct {
     uint32_t id;
     char name[];
 } Auth;
+
+uint32_t msg_protocol_id = 0;
+
+void loadChannel(){
+    msgs.len = 0;
+    //TODO: make so it works during other requests or refactor it
+    Request request = {
+        .protocol_id = msg_protocol_id,
+        .func_id = 1,
+        .packet_id = allocate_incoming_event(),
+        .packet_len = sizeof(MessagesBeforeRequest)
+    };
+    incoming_events[request.packet_id].onEvent = onGetMessageBefore;
+    incoming_events[request.packet_id].as.onGetMessagesBefore.msgs = &msgs;
+    request_hton(&request);
+    uint64_t milis = time_unix_milis();
+    MessagesBeforeRequest msgs_request = {
+        .server_id = 0,
+        .channel_id = dming,
+        .milis_low = milis,
+        .milis_high = milis >> 32,
+        .count = 100,
+    };
+    messagesBeforeRequest_hton(&msgs_request);
+    client_write(&client, &request, sizeof(request));
+    client_write(&client, &msgs_request, sizeof(msgs_request));
+
+    /*
+    Response resp;
+    // TODO: ^^verify things
+    for(;;) {
+        client_read(&client, &resp, sizeof(resp));
+        response_ntoh(&resp);
+        // TODO: ^^verify things
+        // TODO: I don't know how to handle such case:
+        if(resp.packet_len == 0) break;
+        if(resp.packet_len <= sizeof(MessagesBeforeResponse)) abort();
+        size_t content_len = resp.packet_len - sizeof(MessagesBeforeResponse);
+        char* content = malloc(content_len);
+        MessagesBeforeResponse msgs_resp;
+        client_read(&client, &msgs_resp, sizeof(MessagesBeforeResponse));
+        messagesBeforeResponse_ntoh(&msgs_resp);
+        uint64_t milis = (((uint64_t)msgs_resp.milis_high) << 32) | (uint64_t)msgs_resp.milis_low;
+        client_read(&client, content, content_len);
+
+        // TODO: verify all this sheize^
+        Message msg = {
+            .author_id = msgs_resp.author_id,
+            .milis = milis,
+            .content_len = content_len,
+            .content = content
+        };
+        da_insert(&msgs, 0, msg);
+    }
+    */
+}
+
 int main(int argc, const char** argv) {
     register_signals();
     gtinit();
@@ -331,7 +397,6 @@ int main(int argc, const char** argv) {
 
     uint32_t auth_protocol_id = 0;
     // uint32_t echo_protocol_id = 0;
-    uint32_t msg_protocol_id = 0;
 
     uint32_t notify_protocol_id = 0;
 
@@ -478,6 +543,8 @@ int main(int argc, const char** argv) {
         free(sk);
     }
     dming = ~0;
+    tab_list = true;
+    /* 
     {
         char buf[128];
         printf("Who you wanna DM?\n> ");
@@ -486,6 +553,7 @@ int main(int argc, const char** argv) {
         (void)_;
         dming = atoi(buf);
     }
+    
     {
         //TODO: make so it works during other requests or refactor it
         Request request = {
@@ -533,6 +601,7 @@ int main(int argc, const char** argv) {
             da_insert(&msgs, 0, msg);
         }
     }
+    */
 
     stui_clear();
     stui_term_get_size(&term_width, &term_height);
@@ -606,6 +675,10 @@ int main(int argc, const char** argv) {
                 switch(c) {
                 case STUI_KEY_ESC:
                 case 'b':
+                case '\n':
+                    dming = dm_channels.items[tab_list_selection].id;
+                    loadChannel();
+                    break;
                 case 'B':
                     tab_list_state = TAB_LIST_STATE_CATEGORY;
                     break;

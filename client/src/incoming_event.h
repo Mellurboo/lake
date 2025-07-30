@@ -11,6 +11,7 @@ typedef struct { Messages* msgs; Message msg; } OnMessage;
 typedef struct { Messages* msgs; } OnNotification;
 typedef struct { UserMapBucket* user; } OnUserInfo;
 typedef struct { Channels* channels; } OnGetChannels;
+typedef struct { Messages* msgs; } OnGetMessagesBefore;
 typedef void (*event_handler_t)(Client* client, Response* response, IncomingEvent* event);
 struct IncomingEvent {
     event_handler_t onEvent;
@@ -19,6 +20,7 @@ struct IncomingEvent {
         OnNotification onNotification;
         OnUserInfo onUserInfo;
         OnGetChannels onGetChannels;
+        OnGetMessagesBefore onGetMessagesBefore;
     } as;
 };
 
