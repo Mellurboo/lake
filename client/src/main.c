@@ -96,6 +96,10 @@ void render_messages(Client* client, UIBox box, Messages* msgs) {
 static stui_term_flag_t prev_term_flags = 0;
 void restore_prev_term(void) {
     stui_term_set_flags(prev_term_flags);
+    // Alternate buffer.
+    // The escape sequence below shouldn't do anything on terminals that don't support it
+    printf("\033[?1049l");
+    fflush(stdout);
 }
 typedef struct {
     char* items;
@@ -330,6 +334,8 @@ int main(int argc, const char** argv) {
     register_signals();
     gtinit();
     prev_term_flags = stui_term_get_flags();
+    printf("\033[?1049h");
+    fflush(stdout);
     atexit(restore_prev_term);
     client.fd = socket(AF_INET, SOCK_STREAM, 0); 
     client.secure = false;
