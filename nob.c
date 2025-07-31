@@ -52,6 +52,7 @@ int main(int argc, char** argv) {
         EXAMPLE_SERVER_UTILS,
     } example = EXAMPLE_ALL;
     bool run = false;
+    bool gdb = false;
     bool capturing_args = false;
 
     File_Paths run_args = { 0 };
@@ -67,6 +68,7 @@ int main(int argc, char** argv) {
         else if(strcmp(arg, "keygen") == 0) example = EXAMPLE_KEYGEN;
         else if(strcmp(arg, "server-utils") == 0) example = EXAMPLE_SERVER_UTILS;
         else if(strcmp(arg, "run") == 0) run = true;
+        else if(strcmp(arg, "-gdb") == 0) gdb = true;
         else {
             nob_log(NOB_ERROR, "Unexpected argument: `%s`", arg);
             help(stderr, exe);
@@ -98,20 +100,25 @@ int main(int argc, char** argv) {
     }
 
     if(run && example != EXAMPLE_ALL) {
+        const char* program = NULL;
         switch(example) {
         case EXAMPLE_CLIENT:
-            cmd_append(&cmd, "./.build/client/client"EXE_SUFFIX);
+            program = "./.build/client/client"EXE_SUFFIX;
             break;
         case EXAMPLE_SERVER:
-            cmd_append(&cmd, "./.build/server/server"EXE_SUFFIX);
+            program = "./.build/server/server"EXE_SUFFIX;
             break;
         case EXAMPLE_SERVER_UTILS:
-            cmd_append(&cmd, "./.build/server-utils/server-utils"EXE_SUFFIX);
+            program = "./.build/server-utils/server-utils"EXE_SUFFIX;
             break;
         case EXAMPLE_KEYGEN:
-            cmd_append(&cmd, "./.build/keygen/keygen"EXE_SUFFIX);
+            program = "./.build/keygen/keygen"EXE_SUFFIX;
             break;
         }
+        if(gdb) {
+            cmd_append(&cmd, "gdb", program, "--args");
+        }
+        cmd_append(&cmd, program);
         da_append_many(&cmd, run_args.items, run_args.count);
         return cmd_run_sync_and_reset(&cmd) ? 0 : 1;
     }
