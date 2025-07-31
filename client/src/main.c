@@ -673,12 +673,12 @@ int main(int argc, const char** argv) {
                 break;
             case TAB_LIST_STATE_DMS:
                 switch(c) {
-                case STUI_KEY_ESC:
-                case 'b':
                 case '\n':
                     dming = dm_channels.items[tab_list_selection].id;
                     loadChannel();
                     break;
+                case STUI_KEY_ESC:
+                case 'b':
                 case 'B':
                     tab_list_state = TAB_LIST_STATE_CATEGORY;
                     break;
