@@ -213,6 +213,23 @@ void __attribute__((naked)) gtyield(void) {
         "ret"
     );
 # endif
+#elif defined(__i386__) || defined(__i486__) || defined(__i586__) || defined(__i686__)
+    asm(
+        "push %ebp\n"
+        "push %ebx\n"
+        "push %esi\n"
+        "push %edi\n"
+        "movd %esp, %ecx\n"
+        "push %ecx\n"
+        "call gtswitch\n"
+        "movd %eax, %esp\n"
+        "pop %ecx\n"
+        "pop %edi\n"
+        "pop %esi\n"
+        "pop %ebx\n"
+        "pop %ebp\n"
+        "ret"
+    );
 #else
 # error "Please port gtyield to your unknown Architecture"
 #endif 
@@ -220,14 +237,14 @@ void __attribute__((naked)) gtyield(void) {
 
 static void gtprelude(void);
 static void* gtsetup_frame(void* sp_void) {
-    uint64_t* sp = sp_void;
+    uintptr_t* sp = sp_void;
 #if defined(__aarch64__) || defined(__arm64__)
     sp -= 14;
-    memset(sp, 0, 14*sizeof(uint64_t));
-    sp[13] = (uint64_t)gtprelude;
+    memset(sp, 0, 14*sizeof(uintptr_t));
+    sp[13] = (uintptr_t)gtprelude;
 #elif defined(__x86_64__)
     *(--sp) = 0; // Reserve some memory for alignment :O
-    *(--sp) = (uint64_t)gtprelude; // rip
+    *(--sp) = (uintptr_t)gtprelude; // rip
     *(--sp) = 0;         // rbp
     *(--sp) = 0;         // rbx
     *(--sp) = 0;         // r12
@@ -238,6 +255,14 @@ static void* gtsetup_frame(void* sp_void) {
     *(--sp) = 0;         // rsi
     *(--sp) = 0;         // rdi
 # endif
+#elif defined(__i386__) || defined(__i486__) || defined(__i586__) || defined(__i686__)
+    *(--sp) = 0; // Reserve some memory for alignment :O
+    *(--sp) = (uintptr_t)gtprelude; // rip
+    *(--sp) = 0;         // ebp
+    *(--sp) = 0;         // ebx
+    *(--sp) = 0;         // esi
+    *(--sp) = 0;         // edi
+    *(--sp) = 0;         // arg
 #else
 # error "Please port gtsetup_frame to your unknown Architecture"
 #endif
