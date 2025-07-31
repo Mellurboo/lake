@@ -276,7 +276,7 @@ typedef struct {
 
 uint32_t msg_protocol_id = 0;
 
-void loadChannel(Messages* msgs){
+void loadChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id) {
     msgs->len = 0;
     //TODO: make so it works during other requests or refactor it
     Request request = {
@@ -290,8 +290,8 @@ void loadChannel(Messages* msgs){
     request_hton(&request);
     uint64_t milis = time_unix_milis();
     MessagesBeforeRequest msgs_request = {
-        .server_id = 0,
-        .channel_id = dming,
+        .server_id = server_id,
+        .channel_id = channel_id,
         .milis_low = milis,
         .milis_high = milis >> 32,
         .count = 100,
@@ -299,35 +299,6 @@ void loadChannel(Messages* msgs){
     messagesBeforeRequest_hton(&msgs_request);
     client_write(&client, &request, sizeof(request));
     client_write(&client, &msgs_request, sizeof(msgs_request));
-
-    /*
-    Response resp;
-    // TODO: ^^verify things
-    for(;;) {
-        client_read(&client, &resp, sizeof(resp));
-        response_ntoh(&resp);
-        // TODO: ^^verify things
-        // TODO: I don't know how to handle such case:
-        if(resp.packet_len == 0) break;
-        if(resp.packet_len <= sizeof(MessagesBeforeResponse)) abort();
-        size_t content_len = resp.packet_len - sizeof(MessagesBeforeResponse);
-        char* content = malloc(content_len);
-        MessagesBeforeResponse msgs_resp;
-        client_read(&client, &msgs_resp, sizeof(MessagesBeforeResponse));
-        messagesBeforeResponse_ntoh(&msgs_resp);
-        uint64_t milis = (((uint64_t)msgs_resp.milis_high) << 32) | (uint64_t)msgs_resp.milis_low;
-        client_read(&client, content, content_len);
-
-        // TODO: verify all this sheize^
-        Message msg = {
-            .author_id = msgs_resp.author_id,
-            .milis = milis,
-            .content_len = content_len,
-            .content = content
-        };
-        da_insert(&msgs, 0, msg);
-    }
-    */
 }
 
 int main(int argc, const char** argv) {
@@ -681,7 +652,7 @@ int main(int argc, const char** argv) {
                 switch(c) {
                 case '\n':
                     dming = dm_channels.items[tab_list_selection].id;
-                    loadChannel(&msgs);
+                    loadChannel(&msgs, 0, dming);
                     break;
                 case STUI_KEY_ESC:
                 case 'b':
