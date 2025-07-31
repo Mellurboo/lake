@@ -675,10 +675,10 @@ int main(int argc, const char** argv) {
                     if(tab_list_selection == TAB_CATEGORY_DMS) tab_list_state = TAB_LIST_STATE_DMS;
                     break;
                 case STUI_KEY_UP:
-                case STUI_KEY_DOWN:
+                case STUI_KEY_DOWN: {
                     uint32_t next_tab_tab_selection = (uint32_t)c == STUI_KEY_UP ? tab_list_selection - 1 : tab_list_selection + 1;
                     if(next_tab_tab_selection < TAB_CATEGORIES_COUNT) tab_list_selection = next_tab_tab_selection;
-                    break;
+                } break;
                 }
                 break;
             case TAB_LIST_STATE_DMS:
@@ -694,10 +694,10 @@ int main(int argc, const char** argv) {
                     tab_list_state = TAB_LIST_STATE_CATEGORY;
                     break;
                 case STUI_KEY_UP:
-                case STUI_KEY_DOWN:
+                case STUI_KEY_DOWN: {
                     uint32_t next_tab_tab_selection = (uint32_t)c == STUI_KEY_UP ? tab_list_selection - 1 : tab_list_selection + 1;
                     if(next_tab_tab_selection < dm_channels.len) tab_list_selection = next_tab_tab_selection;
-                    break;
+                } break;
                 }
                 break;
             }
