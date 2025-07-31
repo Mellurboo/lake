@@ -146,7 +146,7 @@ GThread* gthread_current(void) {
 
 // Architecture specific
 void __attribute__((naked)) gtyield(void) {
-#ifdef __aarch64__
+#if defined(__aarch64__)
     asm(
         "sub sp, sp, 112\n"
         "stp x19, x20, [sp, #0]\n"
@@ -169,7 +169,7 @@ void __attribute__((naked)) gtyield(void) {
         "add sp, sp, 112\n"
         "ret"
     );
-#else
+#elif defined(__x86_64__)
 # ifdef _WIN32
     asm(
         "push %rbp\n"
@@ -213,17 +213,19 @@ void __attribute__((naked)) gtyield(void) {
         "ret"
     );
 # endif
-#endif // ndef __aarch64__
+#else
+# error "Please port gtyield to your unknown Architecture"
+#endif 
 }
 
 static void gtprelude(void);
 static void* gtsetup_frame(void* sp_void) {
     uint64_t* sp = sp_void;
-#ifdef __aarch64__
+#if defined(__aarch64__) || defined(__arm64__)
     sp -= 14;
     memset(sp, 0, 14*sizeof(uint64_t));
     sp[13] = (uint64_t)gtprelude;
-#else
+#elif defined(__x86_64__)
     *(--sp) = 0; // Reserve some memory for alignment :O
     *(--sp) = (uint64_t)gtprelude; // rip
     *(--sp) = 0;         // rbp
@@ -236,7 +238,9 @@ static void* gtsetup_frame(void* sp_void) {
     *(--sp) = 0;         // rsi
     *(--sp) = 0;         // rdi
 # endif
-#endif // ndef __aarch64__
+#else
+# error "Please port gtsetup_frame to your unknown Architecture"
+#endif
     return sp;
 }
 // End Architecture specific
