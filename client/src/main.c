@@ -272,8 +272,8 @@ typedef struct {
 
 uint32_t msg_protocol_id = 0;
 
-void loadChannel(){
-    msgs.len = 0;
+void loadChannel(Messages* msgs){
+    msgs->len = 0;
     //TODO: make so it works during other requests or refactor it
     Request request = {
         .protocol_id = msg_protocol_id,
@@ -282,7 +282,7 @@ void loadChannel(){
         .packet_len = sizeof(MessagesBeforeRequest)
     };
     incoming_events[request.packet_id].onEvent = onGetMessageBefore;
-    incoming_events[request.packet_id].as.onGetMessagesBefore.msgs = &msgs;
+    incoming_events[request.packet_id].as.onGetMessagesBefore.msgs = msgs;
     request_hton(&request);
     uint64_t milis = time_unix_milis();
     MessagesBeforeRequest msgs_request = {
@@ -675,7 +675,7 @@ int main(int argc, const char** argv) {
                 switch(c) {
                 case '\n':
                     dming = dm_channels.items[tab_list_selection].id;
-                    loadChannel();
+                    loadChannel(&msgs);
                     break;
                 case STUI_KEY_ESC:
                 case 'b':
