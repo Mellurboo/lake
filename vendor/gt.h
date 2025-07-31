@@ -223,7 +223,6 @@ void __attribute__((naked)) gtyield(void) {
         "push %ecx\n"
         "call gtswitch\n"
         "mov %eax, %esp\n"
-        "pop %ecx\n"
         "pop %edi\n"
         "pop %esi\n"
         "pop %ebx\n"
@@ -262,7 +261,6 @@ static void* gtsetup_frame(void* sp_void) {
     *(--sp) = 0;         // ebx
     *(--sp) = 0;         // esi
     *(--sp) = 0;         // edi
-    *(--sp) = 0;         // arg
 #else
 # error "Please port gtsetup_frame to your unknown Architecture"
 #endif
