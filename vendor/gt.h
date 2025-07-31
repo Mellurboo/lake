@@ -30,6 +30,7 @@ void gtblockfd(unsigned int fd, uint32_t events);
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 
 #ifdef _WIN32
 
@@ -145,7 +146,31 @@ GThread* gthread_current(void) {
 
 // Architecture specific
 void __attribute__((naked)) gtyield(void) {
-#ifdef _WIN32
+#ifdef __aarch64__
+    asm(
+        "sub sp, sp, 112\n"
+        "stp x19, x20, [sp, #0]\n"
+        "stp x21, x22, [sp, #16]\n"
+        "stp x23, x24, [sp, #32]\n"
+        "stp x25, x26, [sp, #48]\n"
+        "stp x27, x28, [sp, #64]\n"
+        "stp x29, x30, [sp, #80]\n"
+        "stp x29, x30, [sp, #96]\n"
+        "mov x0, sp\n"
+        "bl gtswitch\n"
+        "mov sp, x0\n"
+        "ldp x19, x20, [sp, #0]\n"
+        "ldp x21, x22, [sp, #16]\n"
+        "ldp x23, x24, [sp, #32]\n"
+        "ldp x25, x26, [sp, #48]\n"
+        "ldp x27, x28, [sp, #64]\n"
+        "ldp x29, x30, [sp, #80]\n"
+        "ldp x29, x30, [sp, #96]\n"
+        "add sp, sp, 112\n"
+        "ret"
+    );
+#else
+# ifdef _WIN32
     asm(
         "push %rbp\n"
         "push %rbx\n"
@@ -168,7 +193,7 @@ void __attribute__((naked)) gtyield(void) {
         "pop %rbp\n"
         "ret"
     );
-#else
+# else
     asm(
         "push %rbp\n"
         "push %rbx\n"
@@ -187,12 +212,18 @@ void __attribute__((naked)) gtyield(void) {
         "pop %rbp\n"
         "ret"
     );
-#endif
+# endif
+#endif // ndef __aarch64__
 }
 
 static void gtprelude(void);
 static void* gtsetup_frame(void* sp_void) {
     uint64_t* sp = sp_void;
+#ifdef __aarch64__
+    sp -= 14;
+    memset(sp, 0, 14*sizeof(uint64_t));
+    sp[13] = (uint64_t)gtprelude;
+#else
     *(--sp) = 0; // Reserve some memory for alignment :O
     *(--sp) = (uint64_t)gtprelude; // rip
     *(--sp) = 0;         // rbp
@@ -201,10 +232,11 @@ static void* gtsetup_frame(void* sp_void) {
     *(--sp) = 0;         // r13
     *(--sp) = 0;         // r14
     *(--sp) = 0;         // r15
-#ifdef _WIN32
+# ifdef _WIN32
     *(--sp) = 0;         // rsi
     *(--sp) = 0;         // rdi
-#endif
+# endif
+#endif // ndef __aarch64__
     return sp;
 }
 // End Architecture specific
