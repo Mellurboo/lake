@@ -172,6 +172,17 @@ void redraw(void) {
             stui_putchar(x, y, ' ');
         }
     }
+    if(term_height < 3) {
+        const char* too_small = "[Too small]";
+        size_t x = term_width < strlen(too_small) ? 0 : (term_width - strlen(too_small)) / 2;
+        size_t y = term_height / 2;
+        while(*too_small && x < term_width) {
+            stui_putchar_color(x++, y, too_small[0], STUI_RGB(0xFF0000), 0);
+            too_small++;
+        }
+        stui_refresh();
+        return;
+    }
     UIBox term_box = {
         0, 0, term_width - 1, term_height - 1
     };
