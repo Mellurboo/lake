@@ -11,7 +11,8 @@ uint64_t time_unix_milis(void) {
     return 0;
 #else
     struct timespec now;
-    timespec_get(&now, TIME_UTC);
+    // timespec_get(&now, TIME_UTC);
+    clock_gettime(CLOCK_REALTIME, &now);
     return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
 #endif
 }
