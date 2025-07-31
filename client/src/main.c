@@ -33,6 +33,10 @@
 #include "get_author_name.h"
 #include "channel.h"
 
+#if defined(__ANDROID__) || defined(_WIN32)
+# define DISABLE_ALT_BUFFER 1
+#endif
+
 #ifdef _WIN32
 #else
 # include <time.h>
@@ -100,10 +104,13 @@ void render_messages(Client* client, UIBox box, Messages* msgs) {
 static stui_term_flag_t prev_term_flags = 0;
 void restore_prev_term(void) {
     stui_term_set_flags(prev_term_flags);
+
+#ifndef DISABLE_ALT_BUFFER
     // Alternate buffer.
     // The escape sequence below shouldn't do anything on terminals that don't support it
     printf("\033[?1049l");
     fflush(stdout);
+#endif
 }
 typedef struct {
     char* items;
@@ -329,8 +336,10 @@ int main(int argc, const char** argv) {
     register_signals();
     gtinit();
     prev_term_flags = stui_term_get_flags();
+#ifndef DISABLE_ALT_BUFFER
     printf("\033[?1049h");
     fflush(stdout);
+#endif
     atexit(restore_prev_term);
     client.fd = socket(AF_INET, SOCK_STREAM, 0); 
     client.secure = false;
