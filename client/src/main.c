@@ -291,8 +291,17 @@ typedef struct {
 
 uint32_t msg_protocol_id = 0;
 
-void loadChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id) {
+static void freeMessage(Message* message) {
+    free(message->content);
+    memset(message, 0, sizeof(*message));
+}
+static void freeMessagesContents(Messages* msgs) {
+    for(size_t i = 0; i < msgs->len; ++i) {
+        freeMessage(&msgs->items[i]);
+    }
     msgs->len = 0;
+}
+void loadChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id) {
     //TODO: make so it works during other requests or refactor it
     Request request = {
         .protocol_id = msg_protocol_id,
@@ -667,6 +676,7 @@ int main(int argc, const char** argv) {
                 switch(c) {
                 case '\n':
                     dming = dm_channels.items[tab_list_selection].id;
+                    freeMessagesContents(&msgs);
                     loadChannel(&msgs, 0, dming);
                     break;
                 case STUI_KEY_ESC:
