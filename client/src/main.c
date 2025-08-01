@@ -119,7 +119,6 @@ typedef struct {
 IncomingEvent incoming_events[MAX_INCOMING_EVENTS];
 
 uint32_t user_protocol_id = 0;
-//TODO: getting info from db doesnt work during MessagesBeforePacket idk what about during notifications
 
 void reader_thread(void* client_void) {
     Client* client = client_void;
@@ -169,13 +168,20 @@ enum {
     TAB_LIST_STATE_CATEGORY,
     TAB_LIST_STATE_DMS,
 } tab_list_state = TAB_LIST_STATE_CATEGORY;
+
+enum {
+    APP_STATE_CHAT,
+    APP_STATE_PROMPT,
+} app_state = APP_STATE_CHAT;
+
 typedef struct {
     const char** items;
     size_t len, cap;
 } TabLabels;
 Channels dm_channels = { 0 };
 TabLabels tab_labels = { 0 };
-void redraw(void) {
+
+void redraw_chat(void) {
     bool notDMING = dming == ~0u || dming == 0;
 
     for(size_t y = 0; y < term_height; ++y) {
@@ -272,6 +278,56 @@ void redraw(void) {
         else stui_goto(input_box.l + 2 + i, input_box.b);
     }
 }
+
+void redraw_prompt(void){
+    for(size_t y = 0; y < term_height; ++y) {
+        for(size_t x = 0; x < term_width; ++x) {
+            stui_putchar(x, y, ' ');
+        }
+    }
+
+    UIBox term_box = {
+        0, 0, term_width - 1, term_height - 1
+    };
+    uibox_draw_border(term_box, '=', '|', '+');
+
+
+    float s = term_width;
+
+    UIBox input_box = {
+        s / 16, term_height/2 - 1, term_width - s/16 - 1, term_height/2 + 1
+    };
+
+    uibox_draw_border(input_box, '=', '|', '+');
+
+    const char* prompt_message = "Provide User ID";
+
+    size_t prompt_len = strlen(prompt_message);
+    for(size_t i = 0; i < prompt_len; i++){
+        int x  = input_box.l + (input_box.r - input_box.l) / 2 - prompt_len / 2 + i;
+        if(x <= 0) continue;
+        if(x >= (int)term_width - 1) continue;
+        stui_putchar(x, input_box.t - 1, prompt_message[i]);
+    }
+
+    size_t i = 0;
+    for(; i < prompt.len; ++i) {
+        if(input_box.l + 1 + i >= input_box.r) continue;
+        stui_putchar(input_box.l + 1 + i, input_box.t + 1, prompt.items[i]);
+    }
+
+    stui_refresh();
+    stui_goto(input_box.l+1 + i, input_box.t + 1);
+}
+
+void redraw(void){
+    switch(app_state){
+        case APP_STATE_CHAT: redraw_chat(); break;
+        case APP_STATE_PROMPT: redraw_prompt(); break;
+    }
+}
+
+
 const char* shift_args(int *argc, const char ***argv) {
     if((*argc) <= 0) return NULL;
     return ((*argc)--, *((*argv)++));
@@ -330,6 +386,29 @@ void loadChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id) {
     messagesBeforeRequest_hton(&msgs_request);
     client_write(&client, &request, sizeof(request));
     client_write(&client, &msgs_request, sizeof(msgs_request));
+}
+
+void openChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id){
+    freeMessagesContents(msgs);
+    loadChannel(msgs, server_id, channel_id);
+}
+
+uint32_t channel_protocol_id = 0;
+void refresh_channels_list(){
+    dm_channels.len = 1; // first element should be * so we dont want to lose it
+    uint32_t server_id = 0;
+    Request req = {
+        .protocol_id = channel_protocol_id,
+        .func_id = 0,
+        .packet_id = allocate_incoming_event(),
+        .packet_len = sizeof(server_id),
+    };
+    incoming_events[req.packet_id].as.onGetChannels.channels = &dm_channels; 
+    incoming_events[req.packet_id].onEvent = onGetChannels; 
+    request_hton(&req);
+    client_write(&client, &req, sizeof(Request));
+    server_id = htonl(server_id);
+    client_write(&client, &server_id, sizeof(server_id));
 }
 
 int main(int argc, const char** argv) {
@@ -410,7 +489,6 @@ int main(int argc, const char** argv) {
 
     uint32_t notify_protocol_id = 0;
 
-    uint32_t channel_protocol_id = 0;
     for(;;) {
         e = client_read(&client, &resp, sizeof(resp));
         assert(e == 1);
@@ -554,6 +632,10 @@ int main(int argc, const char** argv) {
     }
     dming = ~0;
     tab_list = true;
+    da_push(&dm_channels, ((Channel){
+        .id = 0,
+        .name = "+",
+    }));
     /* 
     {
         char buf[128];
@@ -633,19 +715,7 @@ int main(int argc, const char** argv) {
         client_write(&client, &req, sizeof(Request));
     }
     if(channel_protocol_id) {
-        uint32_t server_id = 0;
-        Request req = {
-            .protocol_id = channel_protocol_id,
-            .func_id = 0,
-            .packet_id = allocate_incoming_event(),
-            .packet_len = sizeof(server_id),
-        };
-        incoming_events[req.packet_id].as.onGetChannels.channels = &dm_channels; 
-        incoming_events[req.packet_id].onEvent = onGetChannels; 
-        request_hton(&req);
-        client_write(&client, &req, sizeof(Request));
-        server_id = htonl(server_id);
-        client_write(&client, &server_id, sizeof(server_id));
+        refresh_channels_list();
     }
     for(;;) {
         redraw();
@@ -684,9 +754,15 @@ int main(int argc, const char** argv) {
             case TAB_LIST_STATE_DMS:
                 switch(c) {
                 case '\n':
-                    dming = dm_channels.items[tab_list_selection].id;
-                    freeMessagesContents(&msgs);
-                    loadChannel(&msgs, 0, dming);
+                    uint32_t dm_id = dm_channels.items[tab_list_selection].id;
+                    if(dm_id == 0){
+                        prompt.len = 0;
+                        tab_list = false;
+                        app_state = APP_STATE_PROMPT;
+                        break;
+                    }
+                    dming = dm_id;
+                    openChannel(&msgs, 0, dming);
                     break;
                 case STUI_KEY_ESC:
                 case 'b':
@@ -703,6 +779,12 @@ int main(int argc, const char** argv) {
             }
         } else {
             switch(c) {
+            case STUI_KEY_ESC: {
+                if(app_state == APP_STATE_PROMPT) {
+                    app_state = APP_STATE_CHAT;
+                    tab_list = true;
+                }
+            } break;
             case '\b':
             case 127:
                 if(prompt.len) prompt.len--;
@@ -711,35 +793,62 @@ int main(int argc, const char** argv) {
                 tab_list = !tab_list;
                 break;
             case '\n': {
-                // FIXME: sending empty message causes it to go bogus amogus
-                if(prompt.len == 0) continue;
-                if(prompt.len == 5 && memcmp(prompt.items, ":quit", prompt.len) == 0) goto end;
-                Request req = {
-                    .protocol_id = msg_protocol_id,
-                    .func_id = 0,
-                    .packet_id = allocate_incoming_event(),
-                    .packet_len = sizeof(SendMsgRequest) + prompt.len
-                };
-                incoming_events[req.packet_id].as.onMessage.msgs = &msgs;
-                char* msg = malloc(prompt.len);
-                memcpy(msg, prompt.items, prompt.len);
-                incoming_events[req.packet_id].as.onMessage.msg = (Message) {
-                    .milis = time_unix_milis(),
-                    .author_id = userID,
-                    .content_len = prompt.len,
-                    .content = msg,
-                };
-                incoming_events[req.packet_id].onEvent = okOnMessage;
-                SendMsgRequest send_msg = {
-                    .server_id = 0,
-                    .channel_id = dming,
-                };
-                request_hton(&req);
-                sendMsgRequest_hton(&send_msg);
-                client_write(&client, &req, sizeof(req));
-                client_write(&client, &send_msg, sizeof(send_msg));
-                client_write(&client, prompt.items, prompt.len);
-                prompt.len = 0;
+                
+                switch(app_state){
+                    case APP_STATE_CHAT: {
+                        // FIXME: sending empty message causes it to go bogus amogus
+                        if(prompt.len == 0) continue;
+                        if(prompt.len == 5 && memcmp(prompt.items, ":quit", prompt.len) == 0) goto end;
+                        Request req = {
+                            .protocol_id = msg_protocol_id,
+                            .func_id = 0,
+                            .packet_id = allocate_incoming_event(),
+                            .packet_len = sizeof(SendMsgRequest) + prompt.len
+                        };
+                        incoming_events[req.packet_id].as.onMessage.msgs = &msgs;
+                        char* msg = malloc(prompt.len);
+                        memcpy(msg, prompt.items, prompt.len);
+                        incoming_events[req.packet_id].as.onMessage.msg = (Message) {
+                            .milis = time_unix_milis(),
+                            .author_id = userID,
+                            .content_len = prompt.len,
+                            .content = msg,
+                        };
+                        incoming_events[req.packet_id].onEvent = okOnMessage;
+                        SendMsgRequest send_msg = {
+                            .server_id = 0,
+                            .channel_id = dming,
+                        };
+                        request_hton(&req);
+                        sendMsgRequest_hton(&send_msg);
+                        client_write(&client, &req, sizeof(req));
+                        client_write(&client, &send_msg, sizeof(send_msg));
+                        client_write(&client, prompt.items, prompt.len);
+                        prompt.len = 0;
+
+                        if(msgs.len == 0 /*&& server_id == 0 */) refresh_channels_list(); // TODO: after we move to servers uncomment this
+                    } break;
+
+                    case APP_STATE_PROMPT: {
+                        if(prompt.len == 0) {
+                            app_state = APP_STATE_CHAT;
+                            tab_list = true;
+                            continue;
+                        }
+
+                        da_push(&prompt, 0); // null terminating
+                        uint32_t dm_id = atoi(prompt.items);
+                        prompt.len = 0;
+
+                        app_state = APP_STATE_CHAT;
+                        if(dm_id != 0) {
+                            dming = dm_id;
+                            openChannel(&msgs, 0, dming);
+                        }
+                        else tab_list = true;
+                    } break;
+                }
+
             } break;
             default:
                 da_push(&prompt, c);
