@@ -34,6 +34,7 @@
 #include "channel.h"
 #include "config.h"
 #include "tmprintf.h"
+#include <ctype.h>
 
 #if defined(__ANDROID__) || defined(_WIN32)
 # define DISABLE_ALT_BUFFER 1
@@ -81,7 +82,9 @@ void render_messages(Client* client, UIBox box, Messages* msgs) {
                 x_offset_start = 0;
                 y_offset_offset_start++;
             }
-            stui_putchar(box.l + x_offset_start, box.t + y_offset_start + y_offset_offset_start, *prefix_cursor);
+            char c = *prefix_cursor;
+            if(!isprint(c)) c = '?';
+            stui_putchar(box.l + x_offset_start, box.t + y_offset_start + y_offset_offset_start, c);
             x_offset_start++;
             prefix_cursor++;
         }
@@ -93,7 +96,9 @@ void render_messages(Client* client, UIBox box, Messages* msgs) {
                 continue;
             }
             for(size_t x_offset = x_offset_start; x_offset < box_width && content_cursor < content_end; ++x_offset) {
-                stui_putchar(box.l + x_offset, box.t + y_offset_start + (int32_t)j, *content_cursor++);
+                char c = *content_cursor++;
+                if(!isprint(c)) c = '?';
+                stui_putchar(box.l + x_offset, box.t + y_offset_start + (int32_t)j, c);
             }
             x_offset_start = 0;
         }
