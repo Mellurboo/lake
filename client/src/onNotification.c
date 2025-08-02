@@ -7,8 +7,6 @@
 #include "redraw.h"
 #include "notification.h"
 
-extern uint32_t dming;
-
 void onNotification(Client* client, Response* response, IncomingEvent* event) {
     // SKIP
     if(response->packet_len == 0) return;
@@ -23,7 +21,7 @@ void onNotification(Client* client, Response* response, IncomingEvent* event) {
     // TODO: error check
     client_read(client, content, content_len);
 
-    if(notif.server_id != 0 || notif.channel_id != dming) {
+    if(*event->as.onNotification.active_server_id != notif.server_id || *event->as.onNotification.active_channel_id != notif.channel_id) {
         free(content);
         return;
     }

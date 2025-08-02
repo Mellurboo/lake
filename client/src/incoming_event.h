@@ -8,7 +8,7 @@
 typedef struct Channels Channels;
 typedef struct IncomingEvent IncomingEvent;
 typedef struct { Messages* msgs; Message msg; } OnMessage;
-typedef struct { Messages* msgs; } OnNotification;
+typedef struct { Messages* msgs; uint32_t* active_server_id; uint32_t* active_channel_id;} OnNotification;
 typedef struct { UserMapBucket* user; } OnUserInfo;
 typedef struct { Channels* channels; } OnGetChannels;
 typedef struct { Messages* msgs; } OnGetMessagesBefore;

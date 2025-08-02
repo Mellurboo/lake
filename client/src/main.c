@@ -145,7 +145,8 @@ void reader_thread(void* client_void) {
     exit(1);
 }
 
-uint32_t dming;
+uint32_t active_server_id;
+uint32_t active_channel_id;
 Messages msgs;
 size_t term_width, term_height;
 StringBuilder prompt = { 0 };
@@ -183,7 +184,7 @@ Channels dm_channels = { 0 };
 TabLabels tab_labels = { 0 };
 
 void redraw_chat(void) {
-    bool notDMING = dming == ~0u || dming == 0;
+    bool notCHATING = active_server_id == ~0u || active_channel_id == ~0u || active_channel_id == 0;
 
     for(size_t y = 0; y < term_height; ++y) {
         for(size_t x = 0; x < term_width; ++x) {
@@ -207,7 +208,7 @@ void redraw_chat(void) {
     UIBox tab_list_box;
     if(tab_list) {
         tab_labels.len = 0;
-        if(notDMING) tab_list_box = term_box;
+        if(notCHATING) tab_list_box = term_box;
         else tab_list_box = uibox_chop_left(&term_box, (term_box.r - term_box.l) * 14 / 100);
         uibox_draw_border(tab_list_box, '=', '|', '+');
         switch(tab_list_state) {
@@ -244,19 +245,24 @@ void redraw_chat(void) {
         stui_goto(uibox_inner(tab_list_box).l, uibox_inner(tab_list_box).t + tab_list_selection);
     }
 
-    if(!notDMING){
+    if(!notCHATING){
         UIBox input_box = uibox_chop_bottom(&term_box, 1);
         uibox_draw_border(term_box, '=', '|', '+');
         // stui_window_border(0, 0, term_width - 1, term_height - 2, '=', '|', '+');
         char buf[128];
-        char tmp_dming_name[20];
-        char* dming_name = get_author_name(&client, dming);
-        // TODO: remove code duplication somehow.
-        if(!dming_name) {
-            snprintf(tmp_dming_name, sizeof(tmp_dming_name), "User #%u", dming);
-            dming_name = tmp_dming_name;
+        if(active_server_id == 0){
+            char tmp_dming_name[20];
+            char* dming_name = get_author_name(&client, active_channel_id);
+            // TODO: remove code duplication somehow.
+            if(!dming_name) {
+                snprintf(tmp_dming_name, sizeof(tmp_dming_name), "User #%u", active_channel_id);
+                dming_name = tmp_dming_name;
+            }
+            snprintf(buf, sizeof(buf), "DMs: %s", dming_name);
+        }else{
+            fprintf(stderr, "ERROR: Implement server name logic!");
+            abort();
         }
-        snprintf(buf, sizeof(buf), "DMs: %s", dming_name);
 
         {
             char* str = buf;
@@ -627,71 +633,13 @@ int main(int argc, const char** argv) {
         free(pk);
         free(sk);
     }
-    dming = ~0;
+    active_server_id = ~0;
+    active_channel_id = ~0;
     tab_list = true;
     da_push(&dm_channels, ((Channel){
         .id = 0,
         .name = "+",
     }));
-    /* 
-    {
-        char buf[128];
-        printf("Who you wanna DM?\n> ");
-        fflush(stdout);
-        char* _ = fgets(buf, sizeof(buf), stdin);
-        (void)_;
-        dming = atoi(buf);
-    }
-    
-    {
-        //TODO: make so it works during other requests or refactor it
-        Request request = {
-            .protocol_id = msg_protocol_id,
-            .func_id = 1,
-            .packet_id = 69,
-            .packet_len = sizeof(MessagesBeforeRequest)
-        };
-        request_hton(&request);
-        uint64_t milis = time_unix_milis();
-        MessagesBeforeRequest msgs_request = {
-            .server_id = 0,
-            .channel_id = dming,
-            .milis_low = milis,
-            .milis_high = milis >> 32,
-            .count = 100,
-        };
-        messagesBeforeRequest_hton(&msgs_request);
-        client_write(&client, &request, sizeof(request));
-        client_write(&client, &msgs_request, sizeof(msgs_request));
-        Response resp;
-        // TODO: ^^verify things
-        for(;;) {
-            client_read(&client, &resp, sizeof(resp));
-            response_ntoh(&resp);
-            // TODO: ^^verify things
-            // TODO: I don't know how to handle such case:
-            if(resp.packet_len == 0) break;
-            if(resp.packet_len <= sizeof(MessagesBeforeResponse)) abort();
-            size_t content_len = resp.packet_len - sizeof(MessagesBeforeResponse);
-            char* content = malloc(content_len);
-            MessagesBeforeResponse msgs_resp;
-            client_read(&client, &msgs_resp, sizeof(MessagesBeforeResponse));
-            messagesBeforeResponse_ntoh(&msgs_resp);
-            uint64_t milis = (((uint64_t)msgs_resp.milis_high) << 32) | (uint64_t)msgs_resp.milis_low;
-            client_read(&client, content, content_len);
-
-            // TODO: verify all this sheize^
-            Message msg = {
-                .author_id = msgs_resp.author_id,
-                .milis = milis,
-                .content_len = content_len,
-                .content = content
-            };
-            da_insert(&msgs, 0, msg);
-        }
-    }
-    */
-
 #ifndef DISABLE_ALT_BUFFER
     printf("\033[?1049h");
     fflush(stdout);
@@ -704,6 +652,8 @@ int main(int argc, const char** argv) {
     gtgo(reader_thread, &client);
     size_t notif_event = allocate_incoming_event();
     incoming_events[notif_event].as.onNotification.msgs = &msgs;
+    incoming_events[notif_event].as.onNotification.active_server_id = &active_server_id;
+    incoming_events[notif_event].as.onNotification.active_channel_id = &active_channel_id;
     incoming_events[notif_event].onEvent = onNotification;
 
     if(notify_protocol_id) {
@@ -763,8 +713,9 @@ int main(int argc, const char** argv) {
                         app_state = APP_STATE_PROMPT;
                         break;
                     }
-                    dming = dm_id;
-                    openChannel(&msgs, 0, dming);
+                    active_server_id = 0;
+                    active_channel_id = dm_id;
+                    openChannel(&msgs, active_server_id, active_channel_id);
                     break;
                 case STUI_KEY_ESC:
                 case 'b':
@@ -818,8 +769,8 @@ int main(int argc, const char** argv) {
                         };
                         incoming_events[req.packet_id].onEvent = okOnMessage;
                         SendMsgRequest send_msg = {
-                            .server_id = 0,
-                            .channel_id = dming,
+                            .server_id = active_server_id,
+                            .channel_id = active_channel_id,
                         };
                         request_hton(&req);
                         sendMsgRequest_hton(&send_msg);
@@ -844,8 +795,9 @@ int main(int argc, const char** argv) {
 
                         app_state = APP_STATE_CHAT;
                         if(dm_id != 0) {
-                            dming = dm_id;
-                            openChannel(&msgs, 0, dming);
+                            active_server_id = 0;
+                            active_channel_id = dm_id;
+                            openChannel(&msgs, active_server_id, active_channel_id);
                         }
                         else tab_list = true;
                     } break;
