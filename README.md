@@ -13,3 +13,18 @@ Client:
 ```
 ./nob client run -- -key ./userA
 ```
+
+**NOTE:**
+Your client settings are saved in ~/.lake-tui:
+```
+~/.lake-tui/
+    key.pub
+    key.priv       
+    server.conf    # hostname + port of server
+```
+For example:
+~/.lake-tui/server.conf:
+```toml
+hostname = "localhost"
+port = 8080
+```
