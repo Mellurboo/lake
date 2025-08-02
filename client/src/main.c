@@ -798,7 +798,7 @@ int main(int argc, const char** argv) {
                         client_write(&client, prompt.items, prompt.len);
                         prompt.len = 0;
 
-                        if(msgs.len == 0 /*&& server_id == 0 */) refresh_channels_list(); // TODO: after we move to servers uncomment this
+                        if(msgs.len == 0 && active_server_id == 0) refresh_channels_list();
                     } break;
 
                     case APP_STATE_PROMPT: {
