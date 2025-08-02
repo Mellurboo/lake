@@ -104,14 +104,15 @@ void render_messages(Client* client, UIBox box, Messages* msgs) {
 static stui_term_flag_t prev_term_flags = 0;
 void restore_prev_term(void) {
     stui_term_set_flags(prev_term_flags);
-
+}
 #ifndef DISABLE_ALT_BUFFER
+void restore_alt_buffer(void) {
     // Alternate buffer.
     // The escape sequence below shouldn't do anything on terminals that don't support it
     printf("\033[?1049l");
     fflush(stdout);
-#endif
 }
+#endif
 typedef struct {
     char* items;
     size_t len, cap;
@@ -415,10 +416,6 @@ int main(int argc, const char** argv) {
     register_signals();
     gtinit();
     prev_term_flags = stui_term_get_flags();
-#ifndef DISABLE_ALT_BUFFER
-    printf("\033[?1049h");
-    fflush(stdout);
-#endif
     atexit(restore_prev_term);
     client.fd = socket(AF_INET, SOCK_STREAM, 0); 
     client.secure = false;
@@ -695,6 +692,11 @@ int main(int argc, const char** argv) {
     }
     */
 
+#ifndef DISABLE_ALT_BUFFER
+    printf("\033[?1049h");
+    fflush(stdout);
+    atexit(restore_alt_buffer);
+#endif
     stui_clear();
     stui_term_get_size(&term_width, &term_height);
     stui_setsize(term_width, term_height);
