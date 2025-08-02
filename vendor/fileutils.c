@@ -57,3 +57,22 @@ void remove_carrige_return(char* content){
         memmove(cur, cur + 1, strlen(cur + 1) + 1);
     }
 }
+#ifdef _WIN32
+# include <windows.h>
+#else
+# include <unistd.h>
+# include <sys/stat.h>
+#endif
+// NOTE: stolen from nob.h
+int file_exists(const char *file_path) {
+#if _WIN32
+    DWORD dwAttrib = GetFileAttributesA(file_path);
+    return dwAttrib != INVALID_FILE_ATTRIBUTES;
+#else
+    struct stat statbuf;
+    if (stat(file_path, &statbuf) < 0) {
+        return errno == ENOENT ? 0 : -1;
+    }
+    return 1;
+#endif
+}
