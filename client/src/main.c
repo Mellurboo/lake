@@ -418,41 +418,47 @@ void refresh_channels_list(){
     client_write(&client, &server_id, sizeof(server_id));
 }
 
+void help(FILE* sink, const char* exe) {
+    fprintf(sink, "%s [options]\n", exe);
+    fprintf(sink, "List of available options:\n");
+    fprintf(sink, " -p <port>  - specify server port\n");
+    fprintf(sink, " -ip <ip>   - specify server hostname\n");
+    fprintf(sink, " -key <key> - specify path to public and private key {key}.pub|priv\n");
+}
 int main(int argc, const char** argv) {
     register_signals();
     gtinit();
     prev_term_flags = stui_term_get_flags();
     atexit(restore_prev_term);
-    client.fd = socket(AF_INET, SOCK_STREAM, 0); 
-    client.secure = false;
-    if(client.fd < 0) {
-        fprintf(stderr, "FATAL: Could not create server socket: %s\n", sneterr());
-        return 1;
-    }
-    int opt = 1;
-    if(setsockopt(client.fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        fprintf(stderr, "FATAL: Could not set SO_REUSEADDR: %s\n", sneterr());
-        closesocket(client.fd);
-        return 1;
-    }
+
     const char* hostname = "localhost";
     uint32_t port = 6969;
 
-
     const char* key_name = NULL;
-
     const char* exe = shift_args(&argc, &argv);
     (void)exe;
     while(argc) {
         const char* arg = shift_args(&argc, &argv);
         if(strcmp(arg, "-p") == 0) {
-            assert(argc && "PORT PLS MOTHERFUCKA");
+            if(argc <= 0) {
+                fprintf(stderr, "ERROR: Expected port after -p!\n");
+                help(stderr, exe);
+                return 1;
+            }
             port = atoi(shift_args(&argc, &argv));
         } else if(strcmp(arg, "-ip") == 0) {
-            assert(argc && "IP PLS MOTHERFUCKA");
+            if(argc <= 0) {
+                fprintf(stderr, "ERROR: Expected ip after -ip!\n");
+                help(stderr, exe);
+                return 1;
+            }
             hostname = shift_args(&argc, &argv);
         } else if(strcmp(arg, "-key") == 0){
-            assert(argc && "KEY PLS MOTHERFUCKA");
+            if(argc <= 0) {
+                fprintf(stderr, "ERROR: Expected key after -key!\n");
+                help(stderr, exe);
+                return 1;
+            }
             key_name = shift_args(&argc, &argv);
         } else {
             fprintf(stderr, "ERROR: unexpected argument `%s`\n", arg);
@@ -471,6 +477,18 @@ int main(int argc, const char** argv) {
         }
         
         memcpy(&server_addr.sin_addr, he->h_addr_list[0], he->h_length);
+    }
+    client.fd = socket(AF_INET, SOCK_STREAM, 0); 
+    client.secure = false;
+    if(client.fd < 0) {
+        fprintf(stderr, "FATAL: Could not create socket: %s\n", sneterr());
+        return 1;
+    }
+    int opt = 1;
+    if(setsockopt(client.fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        fprintf(stderr, "FATAL: Could not set SO_REUSEADDR: %s\n", sneterr());
+        closesocket(client.fd);
+        return 1;
     }
 
     if(connect(client.fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
