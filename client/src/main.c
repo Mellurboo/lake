@@ -579,6 +579,7 @@ int main(int argc, const char** argv) {
         }
         if(!key_name) {
             fprintf(stderr, "Please provide a key as the server requires it!\n");
+            help(stderr, exe);
             return 1;
         }
         char tmp_file_name[256] = {0};
