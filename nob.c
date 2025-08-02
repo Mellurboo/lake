@@ -26,7 +26,7 @@ static bool go_run_nob_inside(Nob_Cmd* cmd, const char* dir) {
 }
 
 void help(FILE* sink, const char* exe) {
-    fprintf(sink, "%s (client|server|keygen|server-utils (run)) \n", exe);
+    fprintf(sink, "%s (client|server|keygen|db-utils (run)) \n", exe);
 }
 int main(int argc, char** argv) {
     NOB_GO_REBUILD_URSELF(argc, argv);
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
         else if(strcmp(arg, "client") == 0) example = EXAMPLE_CLIENT;
         else if(strcmp(arg, "server") == 0) example = EXAMPLE_SERVER;
         else if(strcmp(arg, "keygen") == 0) example = EXAMPLE_KEYGEN;
-        else if(strcmp(arg, "server-utils") == 0) example = EXAMPLE_SERVER_UTILS;
+        else if(strcmp(arg, "db-utils") == 0) example = EXAMPLE_SERVER_UTILS;
         else if(strcmp(arg, "run") == 0) run = true;
         else if(strcmp(arg, "-gdb") == 0) gdb = true;
         else {
@@ -82,14 +82,14 @@ int main(int argc, char** argv) {
     case EXAMPLE_ALL:
         if(!go_run_nob_inside(&cmd, "client")) return 1;
         if(!go_run_nob_inside(&cmd, "server")) return 1;
-        if(!go_run_nob_inside(&cmd, "server-utils")) return 1;
+        if(!go_run_nob_inside(&cmd, "db-utils")) return 1;
         if(!go_run_nob_inside(&cmd, "keygen")) return 1;
         break;
     case EXAMPLE_SERVER:
         if(!go_run_nob_inside(&cmd, "server")) return 1;
         break;
     case EXAMPLE_SERVER_UTILS:
-        if(!go_run_nob_inside(&cmd, "server-utils")) return 1;
+        if(!go_run_nob_inside(&cmd, "db-utils")) return 1;
         break;
     case EXAMPLE_CLIENT:
         if(!go_run_nob_inside(&cmd, "client")) return 1;
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
             program = "./.build/server/server"EXE_SUFFIX;
             break;
         case EXAMPLE_SERVER_UTILS:
-            program = "./.build/server-utils/server-utils"EXE_SUFFIX;
+            program = "./.build/db-utils/db-utils"EXE_SUFFIX;
             break;
         case EXAMPLE_KEYGEN:
             program = "./.build/keygen/keygen"EXE_SUFFIX;

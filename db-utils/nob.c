@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
 
     nob_minimal_log_level = NOB_WARNING;
     if(!mkdir_if_not_exists(bindir)) return 1;
-    if(!mkdir_if_not_exists(temp_sprintf("%s/server-utils", bindir))) return 1;
+    if(!mkdir_if_not_exists(temp_sprintf("%s/db-utils", bindir))) return 1;
     nob_minimal_log_level = NOB_INFO;
 
     File_Paths dirs = { 0 }, c_sources = { 0 };
@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
     if(!walk_directory(&dirs, &c_sources, src_dir)) return 1;
     for(size_t i = 0; i < dirs.count; ++i) {
         nob_minimal_log_level = NOB_WARNING;
-        if(!mkdir_if_not_exists(temp_sprintf("%s/server-utils/%s", bindir, dirs.items[i] + src_prefix_len))) return 1;
+        if(!mkdir_if_not_exists(temp_sprintf("%s/db-utils/%s", bindir, dirs.items[i] + src_prefix_len))) return 1;
         nob_minimal_log_level = NOB_INFO;
     }
     File_Paths objs = { 0 };
@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
     File_Paths pathb = { 0 };
     for(size_t i = 0; i < c_sources.count; ++i) {
         const char* src = c_sources.items[i];
-        const char* out = temp_sprintf("%s/server-utils/%.*s.o", bindir, (int)(strlen(src + src_prefix_len)-2), src + src_prefix_len);
+        const char* out = temp_sprintf("%s/db-utils/%.*s.o", bindir, (int)(strlen(src + src_prefix_len)-2), src + src_prefix_len);
         da_append(&objs, out);
         if(!nob_c_needs_rebuild1(&stb, &pathb, out, src)) continue;
         // C compiler
@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
 
     da_append(&objs, temp_sprintf("%s/vendor.o", bindir));
     da_append(&objs, temp_sprintf("%s/sqlite3.o", bindir));
-    const char* exe = temp_sprintf("%s/server-utils/server-utils" EXE_SUFFIX, bindir);
+    const char* exe = temp_sprintf("%s/db-utils/db-utils" EXE_SUFFIX, bindir);
 
     if(needs_rebuild(exe, objs.items, objs.count)) {
         cmd_append(&cmd, cc, "-o", exe);
