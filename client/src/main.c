@@ -733,7 +733,10 @@ int main(int argc, const char** argv) {
                     tab_list_selection = TAB_CATEGORY_SERVERS;
                     break;
                 case '\n':
-                    if(tab_list_selection == TAB_CATEGORY_DMS) tab_list_state = TAB_LIST_STATE_DMS;
+                    if(tab_list_selection == TAB_CATEGORY_DMS) {
+                        tab_list_state = TAB_LIST_STATE_DMS;
+                        tab_list_selection = 0;
+                    }
                     break;
                 case STUI_KEY_UP:
                 case STUI_KEY_DOWN: {
@@ -760,6 +763,7 @@ int main(int argc, const char** argv) {
                 case 'b':
                 case 'B':
                     tab_list_state = TAB_LIST_STATE_CATEGORY;
+                    tab_list_selection = 0;
                     break;
                 case STUI_KEY_UP:
                 case STUI_KEY_DOWN: {
