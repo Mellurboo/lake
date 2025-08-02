@@ -32,6 +32,8 @@
 #include "messagesBefore.h"
 #include "get_author_name.h"
 #include "channel.h"
+#include "config.h"
+#include "tmprintf.h"
 
 #if defined(__ANDROID__) || defined(_WIN32)
 # define DISABLE_ALT_BUFFER 1
@@ -47,9 +49,6 @@
 
 UserMap user_map = { 0 };
 Client client = {0};
-// Generic response header
-#define PORT 6969
-
 void render_messages(Client* client, UIBox box, Messages* msgs) {
     size_t box_width = box.r - box.l;
     int32_t y_offset_start = box.b - box.t + 1;
@@ -425,16 +424,32 @@ void help(FILE* sink, const char* exe) {
     fprintf(sink, " -ip <ip>   - specify server hostname\n");
     fprintf(sink, " -key <key> - specify path to public and private key {key}.pub|priv\n");
 }
+
+// NOTE: Stolen from nob
 int main(int argc, const char** argv) {
     register_signals();
     gtinit();
     prev_term_flags = stui_term_get_flags();
     atexit(restore_prev_term);
 
-    const char* hostname = "localhost";
-    uint32_t port = 6969;
+    ConfigServer config_server = {
+        .hostname = "localhost",
+        .port = 6969,
+    };
+    char* key_name = NULL;
 
-    const char* key_name = NULL;
+    char* home = getenv("HOME");
+    if(home && file_exists(tmprintf("%s/.lake-tui", home)) == 1) {
+        if(file_exists(tmprintf("%s/.lake-tui/key.pub", home)) == 1 && 
+           file_exists(tmprintf("%s/.lake-tui/key.priv", home)) == 1) {
+            const char* tmp = tmprintf("%s/.lake-tui/key", home);
+            key_name = calloc(strlen(tmp) + 1, sizeof(char));
+            memcpy(key_name, tmp, strlen(tmp));
+        } 
+        const char* config_server_path = tmprintf("%s/.lake-tui/server.conf", home);
+        if(file_exists(config_server_path) == 1) configServer_load_from_file(&config_server, config_server_path);
+    }
+
     const char* exe = shift_args(&argc, &argv);
     (void)exe;
     while(argc) {
@@ -445,21 +460,21 @@ int main(int argc, const char** argv) {
                 help(stderr, exe);
                 return 1;
             }
-            port = atoi(shift_args(&argc, &argv));
+            config_server.port = atoi(shift_args(&argc, &argv));
         } else if(strcmp(arg, "-ip") == 0) {
             if(argc <= 0) {
                 fprintf(stderr, "ERROR: Expected ip after -ip!\n");
                 help(stderr, exe);
                 return 1;
             }
-            hostname = shift_args(&argc, &argv);
+            config_server.hostname = (char*)shift_args(&argc, &argv);
         } else if(strcmp(arg, "-key") == 0){
             if(argc <= 0) {
                 fprintf(stderr, "ERROR: Expected key after -key!\n");
                 help(stderr, exe);
                 return 1;
             }
-            key_name = shift_args(&argc, &argv);
+            key_name = (char*)shift_args(&argc, &argv);
         } else {
             fprintf(stderr, "ERROR: unexpected argument `%s`\n", arg);
             return 1;
@@ -468,11 +483,11 @@ int main(int argc, const char** argv) {
 
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    if(inet_pton(AF_INET, hostname, &server_addr.sin_addr) <= 0) {
-        struct hostent *he = gethostbyname(hostname);
+    server_addr.sin_port = htons(config_server.port);
+    if(inet_pton(AF_INET, config_server.hostname, &server_addr.sin_addr) <= 0) {
+        struct hostent *he = gethostbyname(config_server.hostname);
         if (he == NULL) {
-            fprintf(stderr, "FATAL: Couldn't resolve hostname %s: %s\n", hostname, sneterr()); 
+            fprintf(stderr, "FATAL: Couldn't resolve hostname %s: %s\n", config_server.hostname, sneterr()); 
             return 1;
         }
         
@@ -492,7 +507,7 @@ int main(int argc, const char** argv) {
     }
 
     if(connect(client.fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        fprintf(stderr, "FATAL: Couldn't connect to %s %d: %s\n", hostname, PORT, sneterr());
+        fprintf(stderr, "FATAL: Couldn't connect to %s %d: %s\n", config_server.hostname, config_server.port, sneterr());
         return 1;
     }
 
