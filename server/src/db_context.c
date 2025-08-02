@@ -199,7 +199,7 @@ int DbContext_get_msgs_before(DbContext* db, uint32_t server_id, uint32_t channe
 
         sqlite3_stmt *stmt;
         char buf[255] = {0};
-        snprintf(buf, sizeof(buf), "select author_id, milis, content from dm_%u_%u where milis < %lu limit %u",min_user_id, max_user_id, milis, limit);
+        snprintf(buf, sizeof(buf), "select author_id, milis, content from dm_%u_%u where milis < %lu order by milis asc limit %u",min_user_id, max_user_id, milis, limit);
         int e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
         if(e != SQLITE_OK) return -1;
 
