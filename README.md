@@ -6,7 +6,7 @@ The new generation chat client infrastructure
 Server:
 ```
 ./nob keygen run -- ./userA
-./nob server-utils run -- -u ./userA.pub userA
+./nob db-utils run -- -u ./userA.pub userA
 ./nob server run
 ```
 Client:
