@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
         EXAMPLE_CLIENT,
         EXAMPLE_SERVER,
         EXAMPLE_KEYGEN,
-        EXAMPLE_SERVER_UTILS,
+        EXAMPLE_DB_UTILS,
     } example = EXAMPLE_ALL;
     bool run = false;
     bool gdb = false;
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
         else if(strcmp(arg, "client") == 0) example = EXAMPLE_CLIENT;
         else if(strcmp(arg, "server") == 0) example = EXAMPLE_SERVER;
         else if(strcmp(arg, "keygen") == 0) example = EXAMPLE_KEYGEN;
-        else if(strcmp(arg, "db-utils") == 0) example = EXAMPLE_SERVER_UTILS;
+        else if(strcmp(arg, "db-utils") == 0) example = EXAMPLE_DB_UTILS;
         else if(strcmp(arg, "run") == 0) run = true;
         else if(strcmp(arg, "-gdb") == 0) gdb = true;
         else {
@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
     case EXAMPLE_SERVER:
         if(!go_run_nob_inside(&cmd, "server")) return 1;
         break;
-    case EXAMPLE_SERVER_UTILS:
+    case EXAMPLE_DB_UTILS:
         if(!go_run_nob_inside(&cmd, "db-utils")) return 1;
         break;
     case EXAMPLE_CLIENT:
@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
         case EXAMPLE_SERVER:
             program = "./.build/server/server"EXE_SUFFIX;
             break;
-        case EXAMPLE_SERVER_UTILS:
+        case EXAMPLE_DB_UTILS:
             program = "./.build/db-utils/db-utils"EXE_SUFFIX;
             break;
         case EXAMPLE_KEYGEN:
