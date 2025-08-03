@@ -34,5 +34,5 @@ void onGetMessageBefore(Client* client, Response* resp, IncomingEvent* event){
         .content_len = content_len,
         .content = content
     };
-    da_insert(event->as.onGetMessagesBefore.msgs, 0, msg);
+    da_push(event->as.onGetMessagesBefore.msgs, msg);
 }
