@@ -39,14 +39,14 @@ typedef struct{
 void usage(const char* program){
     printf("[USAGE] %s [-u <public key filepath> <username>] || --help\n", program);
 }
-
+#define MAX_HANDLE_SIZE 64
+#define STRINGIFY0(x) # x
+#define STRINGIFY1(x) STRINGIFY0(x)
 int main(int argc, char** argv){
     const char* program = shift_args(&argc, &argv);
     (void)program;
 
     Users users = {0};
-
-    bool help = false;
 
     while(argc){
         const char* arg = shift_args(&argc, &argv);
@@ -93,6 +93,8 @@ int main(int argc, char** argv){
     if(e != SQLITE_OK) return -1;
     e = execute_sql(db, "create table if not exists dms(min_user_id INTEGER, max_user_id INTEGER)");
     if(e != SQLITE_OK) return -1;
+    e = execute_sql(db, "create table if not exists user_handles(handle VARCHAR("STRINGIFY1(MAX_HANDLE_SIZE)") UNIQUE PRIMARY KEY, user_id INTEGER)");
+    if(e != SQLITE_OK) return -1;
 
     String_Builder sb = {0};
     sqlite3_stmt *stmt;
@@ -108,6 +110,8 @@ int main(int argc, char** argv){
         e = execute_sql(db, temp_sprintf("insert into users(username) values (\"%s\")", user->username));
         if(e != SQLITE_OK) return -1;
         size_t userID = sqlite3_last_insert_rowid(db);
+        e = execute_sql(db, temp_sprintf("insert into user_handles(handle, user_id) values (\"%s\", %lu)", user->username, userID));
+        if(e != SQLITE_OK) return -1;
         e = sqlite3_prepare_v2(db, "insert into public_keys(key, user_id) values (?, ?);", -1, &stmt, 0);
         if(e != SQLITE_OK) return -1;
 
