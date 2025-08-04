@@ -48,3 +48,13 @@ intptr_t client_write_error(Client* client, uint32_t packet_id, uint32_t error) 
     response_hton(&response);
     return client_write(client, &response, sizeof(response));
 }
+void client_discard(Client* client, size_t size) {
+    char buf[64];
+    while(size) {
+        size_t n = size < sizeof(buf) ? size : sizeof(buf);
+        intptr_t e = gtread_exact(client->fd, buf, n);
+        if(e != 1) return;
+        size -= n;
+    }
+}
+
