@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-typedef struct {
+typedef struct Request {
     uint32_t protocol_id;
     uint32_t func_id;
     uint32_t packet_id;

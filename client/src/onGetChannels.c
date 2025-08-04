@@ -1,4 +1,4 @@
-#include "onOkMessage.h"
+#include "onGetChannels.h"
 #include "client.h"
 #include "response.h"
 #include "incoming_event.h"
@@ -7,7 +7,6 @@
 #include <assert.h>
 #include <arpa/inet.h>
 #include "channel.h"
-#include "redraw.h"
 
 void onGetChannels(Client* client, Response* response, IncomingEvent* event) {
     (void)client;

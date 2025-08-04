@@ -1,6 +1,7 @@
 #include "client.h"
 #include <snet.h>
 #include <gt.h>
+#include <stdio.h>
 
 static intptr_t gtread_exact(Client* client, void* buf, size_t size) {
     while(size) {

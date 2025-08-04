@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include "post_quantum_cryptography.h"
 
-typedef struct {
+typedef struct Client {
     int fd;
     uint32_t userID;
     uint32_t notifyID;

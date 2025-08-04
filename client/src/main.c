@@ -35,6 +35,8 @@
 #include "config.h"
 #include "tmprintf.h"
 #include <ctype.h>
+#include "handle_map.h"
+#include "onUserHandle.h"
 
 #if defined(__ANDROID__) || defined(_WIN32)
 # define DISABLE_ALT_BUFFER 1
@@ -49,6 +51,7 @@
 #define ARRAY_LEN(a) (sizeof(a)/sizeof(*(a)))
 
 UserMap user_map = { 0 };
+HandleMap handle_map = { 0 };
 Client client = {0};
 void render_messages(Client* client, UIBox box, Messages* msgs) {
     size_t box_width = box.r - box.l;
@@ -329,10 +332,11 @@ void redraw_prompt(const char* prompt_message){
     stui_goto(input_box.l+1 + i, input_box.t + 1);
 }
 
+uint32_t user_handle_protocol_id = 0;
 void redraw(void){
     switch(app_state){
         case APP_STATE_CHAT: redraw_chat(); break;
-        case APP_STATE_PROMPT: redraw_prompt("Provide User ID"); break;
+        case APP_STATE_PROMPT: redraw_prompt(user_handle_protocol_id ? "Provide User Handle" : "Provide User ID"); break;
     }
 }
 
@@ -360,7 +364,6 @@ typedef struct {
     uint32_t id;
     char name[];
 } Auth;
-
 uint32_t msg_protocol_id = 0;
 
 static void freeMessage(Message* message) {
@@ -549,10 +552,11 @@ int main(int argc, const char** argv) {
         fprintf(stderr, "INFO: Protocol id=%u name=%s\n", protocol->id, protocol->name);
         // if(strcmp(protocol->name, "echo") == 0) echo_protocol_id = protocol->id;
         if(strcmp(protocol->name, "auth") == 0) auth_protocol_id = protocol->id;
-        if(strcmp(protocol->name, "msg")  == 0) msg_protocol_id = protocol->id; 
-        if(strcmp(protocol->name, "notify") == 0) notify_protocol_id = protocol->id;
-        if(strcmp(protocol->name, "user") == 0) user_protocol_id = protocol->id;
-        if(strcmp(protocol->name, "channel") == 0) channel_protocol_id = protocol->id;
+        else if(strcmp(protocol->name, "msg")  == 0) msg_protocol_id = protocol->id; 
+        else if(strcmp(protocol->name, "notify") == 0) notify_protocol_id = protocol->id;
+        else if(strcmp(protocol->name, "user") == 0) user_protocol_id = protocol->id;
+        else if(strcmp(protocol->name, "channel") == 0) channel_protocol_id = protocol->id;
+        else if(strcmp(protocol->name, "userHandle") == 0) user_handle_protocol_id = protocol->id;
         free(protocol);
     }
     if(!msg_protocol_id) {
@@ -831,7 +835,30 @@ int main(int argc, const char** argv) {
                         }
 
                         da_push(&prompt, 0); // null terminating
-                        uint32_t dm_id = atoi(prompt.items);
+                        uint32_t dm_id = 0;
+                        if(user_handle_protocol_id) {
+                            HandleMapBucket* bucket = handle_map_get_or_insert(&handle_map, prompt.items);
+                            if(!bucket->user_id) {
+                                Request request = {
+                                    .protocol_id = user_handle_protocol_id,
+                                    .func_id = 0,
+                                    .packet_id = allocate_incoming_event(),
+                                    .packet_len = prompt.len - 1
+                                };
+                                bucket->in_progress = true;
+                                incoming_events[request.packet_id].as.onUserHandle.bucket = bucket;
+                                incoming_events[request.packet_id].onEvent = onUserHandle;
+                                request_hton(&request);
+                                client_write(&client, &request, sizeof(request));
+                                client_write(&client, prompt.items, prompt.len - 1);
+                                // TODO: unspinlock this shit
+                                while(bucket->in_progress) {
+                                    gtyield();
+                                }
+                            }
+                            if(bucket->user_id == 0) free(handle_map_remove(&handle_map, bucket->handle));
+                            else dm_id = bucket->user_id;
+                        } else dm_id = atoi(prompt.items);
                         prompt.len = 0;
 
                         app_state = APP_STATE_CHAT;
