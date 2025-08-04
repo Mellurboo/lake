@@ -14,7 +14,7 @@ typedef struct {
 } Request;
 ```
 - protocol_id - refers to the [Protocol](#Protocol) we want to make our request to
-- func_id - refers to the [Function](#Function) we want to run on this protocol.
+- func_id - refers to the Function we want to run on this protocol.
 - packet_id - is an identifier to identify our request in the responses (checkout packet_id in [Response](#Response))
 - packet_len - length of the subsequent data of our Request in bytes.
 
