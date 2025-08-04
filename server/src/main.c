@@ -16,58 +16,40 @@
 #include "response.h"
 #include "protocols.h"
 #include "protocols/protocol.h"
+#include "error.h"
 // Global variables
 DbContext* db = NULL;
 UserMap user_map = { 0 };
 
-enum {
-    ERROR_INVALID_PROTOCOL_ID = 1,
-    ERROR_INVALID_FUNC_ID,
-    ERROR_NOT_AUTH
-};
-
 void client_thread(void* fd_void) {
     Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0, .secure = false};
     list_init(&client.list);
-    Request req_header;
-    Response res_header;
+    Request header;
     for(;;) {
-        int n = client_read(&client, &req_header, sizeof(req_header));
+        int n = client_read(&client, &header, sizeof(header));
         if(n < 0) break;
         if(n == 0) break;
-        request_ntoh(&req_header);
-        if(req_header.protocol_id >= protocols_count) {
-            error("%d: Invalid protocol_id: %u", client.fd, req_header.protocol_id);
-            res_header.packet_id = req_header.packet_id;
-            res_header.opcode = -ERROR_INVALID_PROTOCOL_ID;
-            res_header.packet_len = 0;
-            response_hton(&res_header);
-            client_write(&client, &res_header, sizeof(res_header));
+        request_ntoh(&header);
+        if(header.protocol_id >= protocols_count) {
+            error("%d: Invalid protocol_id: %u", client.fd, header.protocol_id);
+            client_write_error(&client, header.packet_id, ERROR_INVALID_PROTOCOL_ID);
             continue;
         }
-        Protocol* proto = protocols[req_header.protocol_id];
-        if(req_header.func_id >= proto->funcs_count) {
-            error("%d: Invalid func_id: %u",  client.fd, req_header.func_id);
-            res_header.packet_id = req_header.packet_id;
-            res_header.opcode = -ERROR_INVALID_FUNC_ID;
-            res_header.packet_len = 0;
-            response_hton(&res_header);
-            client_write(&client, &res_header, sizeof(res_header));
+        Protocol* proto = protocols[header.protocol_id];
+        if(header.func_id >= proto->funcs_count) {
+            error("%d: Invalid func_id: %u",  client.fd, header.func_id);
+            client_write_error(&client, header.packet_id, ERROR_INVALID_FUNC_ID);
             continue;
         }
 
-        if (client.userID == (uint32_t)-1 && req_header.protocol_id >= 2){
+        if (client.userID == (uint32_t)-1 && header.protocol_id >= 2){
             error("%d: Not Authenticated", client.fd);
-            res_header.packet_id = req_header.packet_id;
-            res_header.opcode = -ERROR_NOT_AUTH;
-            res_header.packet_len = 0;
-            response_hton(&res_header);
-            client_write(&client, &res_header, sizeof(res_header));
+            client_write_error(&client, header.packet_id, ERROR_NOT_AUTH);
             continue;
         }
 
-        info("%d: %s func_id=%d", client.fd, proto->name, req_header.func_id);
-        proto->funcs[req_header.func_id](&client, &req_header);
+        info("%d: %s func_id=%d", client.fd, proto->name, header.func_id);
+        proto->funcs[header.func_id](&client, &header);
     }
     list_remove(&client.list);
     closesocket(client.fd);

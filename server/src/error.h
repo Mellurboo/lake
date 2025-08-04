@@ -1,0 +1,7 @@
+#pragma once
+enum {
+    ERROR_INVALID_PROTOCOL_ID = 1,
+    ERROR_INVALID_FUNC_ID,
+    ERROR_NOT_AUTH,
+    ERROR_INVALID_PACKET_LEN,
+};
