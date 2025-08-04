@@ -3,6 +3,11 @@
 The new generation chat client infrastructure 
 
 ## Quickstart
+Build System:
+```
+cc -o nob nob.c
+```
+
 Server:
 ```
 ./nob keygen run -- ./userA
