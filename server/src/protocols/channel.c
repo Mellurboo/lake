@@ -71,7 +71,13 @@ void getChannels(Client* client, Request* header) {
 err_get_channels:
     free_channels(&channels);
 err_read:
-    /*TODO: throw error here*/
+    Response resp = {
+        .packet_id = header->packet_id,
+        .opcode = 1,
+        .packet_len = 0
+    };
+    response_hton(&resp);
+    client_write(client, &resp, sizeof(Response));
     return;
 }
 protocol_func_t channelProtocolFuncs[] = {

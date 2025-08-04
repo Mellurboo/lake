@@ -18,3 +18,9 @@ intptr_t client_read(Client* client, void* buf, size_t size);
 intptr_t client_write(Client* client, void* buf, size_t size);
 intptr_t client_write_error(Client* client, uint32_t packet_id, uint32_t error);
 void client_discard(Client* client, size_t size);
+
+
+typedef struct{
+    struct list_head list;
+    Client* client;
+} ClientRef;

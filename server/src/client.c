@@ -36,7 +36,9 @@ intptr_t client_read(Client* client, void* buf, size_t size) {
 }
 
 intptr_t client_write(Client* client, void* buf, size_t size) {
-    if (client->secure) AES_CTR_xcrypt_buffer(&client->aes_ctx_write, buf, size);
+    if (client->secure) {
+        AES_CTR_xcrypt_buffer(&client->aes_ctx_write, buf, size);
+    }
     return gtwrite_exact(client->fd, buf, size);
 }
 intptr_t client_write_error(Client* client, uint32_t packet_id, uint32_t error) {

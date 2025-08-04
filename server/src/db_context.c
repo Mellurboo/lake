@@ -52,6 +52,8 @@ int DbContext_init(DbContext** dbOut){
    if(e != SQLITE_OK) return -1;
    e = execute_sql(db->db, "create table if not exists user_handles(handle VARCHAR("STRINGIFY1(MAX_HANDLE_SIZE)") UNIQUE PRIMARY KEY, user_id INTEGER)");
    if(e != SQLITE_OK) return -1;
+   e = execute_sql(db->db, "create table if not exists servers(server_id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT, server_name text)");
+   if(e != SQLITE_OK) return -1;
 
    *dbOut = db;
    return 0; 
@@ -160,6 +162,9 @@ int DbContext_create_dms_if_not_exist(DbContext* db, uint32_t min_user_id, uint3
 }
 
 int DbContext_send_msg(DbContext* db, uint32_t server_id, uint32_t channel_id, uint32_t author_id, const char* content, size_t content_len, uint64_t milis){
+    sqlite3_stmt *stmt;
+    char buf[255] = {0};
+    int e;
     if(server_id == 0){
         uint32_t max_user_id = author_id < channel_id ? channel_id : author_id;
         uint32_t min_user_id = author_id < channel_id ? author_id : channel_id;
@@ -173,66 +178,68 @@ int DbContext_send_msg(DbContext* db, uint32_t server_id, uint32_t channel_id, u
         // TODO: errors
         if(e < 0) return -1;
 
-        sqlite3_stmt *stmt;
-        char buf[255] = {0};
         snprintf(buf, sizeof(buf), "insert into dm_%u_%u(author_id, milis, content) values(?, ?, ?)", min_user_id, max_user_id);
         e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
         if(e != SQLITE_OK) goto sqlite_bind_err;
-        e = sqlite3_bind_int(stmt, 1, author_id);
+    }else{
+        snprintf(buf, sizeof(buf), "insert into server_%u_%u(author_id, milis, content) values(?, ?, ?)", server_id, channel_id);
+        e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
         if(e != SQLITE_OK) goto sqlite_bind_err;
-        e = sqlite3_bind_int64(stmt, 2, milis);
-        if(e != SQLITE_OK) goto sqlite_bind_err;
-        e = sqlite3_bind_text(stmt, 3, content, content_len, SQLITE_STATIC);
-        if(e != SQLITE_OK) goto sqlite_bind_err;
-        e = sqlite3_step(stmt);
-        if(e != SQLITE_DONE) goto sqlite_step_err;
-        sqlite3_finalize(stmt);
-        return 0;
-    sqlite_step_err:
-    sqlite_bind_err:
-        sqlite3_finalize(stmt);
-        return -1;
     }
-    //TODO: we assert its DMs
-    assert(false && "TODO: everything other than DMs");
+    e = sqlite3_bind_int(stmt, 1, author_id);
+    if(e != SQLITE_OK) goto sqlite_bind_err;
+    e = sqlite3_bind_int64(stmt, 2, milis);
+    if(e != SQLITE_OK) goto sqlite_bind_err;
+    e = sqlite3_bind_text(stmt, 3, content, content_len, SQLITE_STATIC);
+    if(e != SQLITE_OK) goto sqlite_bind_err;
+    e = sqlite3_step(stmt);
+    if(e != SQLITE_DONE) goto sqlite_step_err;
+    sqlite3_finalize(stmt);
+    return 0;
+sqlite_step_err:
+sqlite_bind_err:
+    sqlite3_finalize(stmt);
+    return -1;
 }
 int DbContext_get_msgs_before(DbContext* db, uint32_t server_id, uint32_t channel_id, uint32_t author_id, uint64_t milis, uint32_t limit, Messages* msgs){
+    sqlite3_stmt *stmt;
+    char buf[255] = {0};
+    int e;
     if(server_id == 0){
         uint32_t max_user_id = author_id < channel_id ? channel_id : author_id;
         uint32_t min_user_id = author_id < channel_id ? author_id : channel_id;
 
-        sqlite3_stmt *stmt;
-        char buf[255] = {0};
         snprintf(buf, sizeof(buf), "select author_id, milis, content from dm_%u_%u where milis < %lu order by milis desc limit %u",min_user_id, max_user_id, milis, limit);
-        int e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
+        e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
         if(e != SQLITE_OK) return -1;
-
-        msgs->len = 0;
-        while(sqlite3_step(stmt) == SQLITE_ROW) {
-            Message msg = {0};
-            msg.author = sqlite3_column_int(stmt, 0); 
-            msg.milis = sqlite3_column_int64(stmt, 1);
-            const char* temp_content = (const char*)sqlite3_column_text(stmt, 2);
-            msg.content_len = strlen(temp_content);
-            msg.content = calloc(msg.content_len, 1);
-            memcpy(msg.content, temp_content, msg.content_len);
-            da_push(msgs, msg);
-        }
-
-        sqlite3_finalize(stmt);
-
-        return 0;
+    }else{
+        snprintf(buf, sizeof(buf), "select author_id, milis, content from server_%u_%u where milis < %lu order by milis desc limit %u",server_id, channel_id, milis, limit);
+        e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
+        if(e != SQLITE_OK) return -1;
     }
-    //TODO: we assert its DMs
-    assert(false && "TODO: everything other than DMs");
+
+    msgs->len = 0;
+    while(sqlite3_step(stmt) == SQLITE_ROW) {
+        Message msg = {0};
+        msg.author = sqlite3_column_int(stmt, 0); 
+        msg.milis = sqlite3_column_int64(stmt, 1);
+        const char* temp_content = (const char*)sqlite3_column_text(stmt, 2);
+        msg.content_len = strlen(temp_content);
+        msg.content = calloc(msg.content_len, 1);
+        memcpy(msg.content, temp_content, msg.content_len);
+        da_push(msgs, msg);
+    }
+
+    sqlite3_finalize(stmt);
     return 0;
 }
 int DbContext_get_channels(DbContext* db, uint32_t server_id, uint32_t author_id, Channels* channels) {
+    sqlite3_stmt *stmt;
+    char buf[255] = { 0 };
+    int e;
     if(server_id == 0) {
-        char buf[255] = { 0 };
         snprintf(buf, sizeof(buf), "select * from dms where min_user_id = %u or max_user_id = %u", author_id, author_id);
-        sqlite3_stmt *stmt;
-        int e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
+        e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
         if(e != SQLITE_OK) return -1;
         channels->len = 0;
         while(sqlite3_step(stmt) == SQLITE_ROW) {
@@ -251,11 +258,20 @@ int DbContext_get_channels(DbContext* db, uint32_t server_id, uint32_t author_id
             if(channels->items[i].name == NULL) return -1;
             fprintf(stderr, "Okay got username: `%s`\n", channels->items[i].name);
         }
-        return 0;
+    }else{
+        snprintf(buf, sizeof(buf), "select channel_id, channel_name from server_%u", server_id);
+        e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, NULL);
+        if(e != SQLITE_OK) return -1;
+        channels->len = 0;
+        while(sqlite3_step(stmt) == SQLITE_ROW) {
+            Channel channel = { 0 };
+            channel.id = sqlite3_column_int(stmt, 0);
+            channel.name = (char*)sqlite3_column_text(stmt, 1);
+            channel.name = strdup(channel.name);
+            da_push(channels, channel);
+        }
+        sqlite3_finalize(stmt);
     }
-    fprintf(stderr, "Get it for %u\n", server_id);
-    //TODO: we assert its DMs
-    assert(false && "TODO: everything other than DMs");
     return 0;
 }
 int DbContext_get_user_id_from_handle(DbContext* db, const char* handle, size_t handle_len, uint32_t* user_id) {
@@ -284,4 +300,35 @@ void free_channels(Channels* channels) {
     }
     free(channels->items);
     memset(channels, 0, sizeof(*channels));
+}
+
+int DbContext_get_servers(DbContext* db, Servers* servers){
+    sqlite3_stmt *stmt;
+    int e = sqlite3_prepare_v2(db->db, "select server_id, server_name from servers", -1, &stmt, 0);
+    if(e != SQLITE_OK) return -1;
+
+    servers->len = 0;
+    while(sqlite3_step(stmt) == SQLITE_ROW){
+        Server server = {0};
+        server.id = sqlite3_column_int(stmt, 0);
+        server.name = (char*)sqlite3_column_text(stmt, 1);
+        server.name = strdup(server.name);
+        da_push(servers, server);
+    }
+
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
+void free_server(Server* server){
+    free(server->name);
+    memset(server, 0, sizeof(*server));
+}
+
+void free_servers(Servers* servers){
+    for(size_t i = 0; i < servers->len; ++i){
+        free_server(&servers->items[i]);
+    }
+    free(servers->items);
+    memset(servers, 0, sizeof(*servers));
 }

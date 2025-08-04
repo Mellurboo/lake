@@ -36,6 +36,21 @@ typedef struct{
     size_t count, capacity;
 } Users;
 
+typedef struct{
+    const char** items;
+    size_t count, capacity;
+} Servers;
+
+typedef struct{
+    const char* server_name;
+    const char* channel_name;
+} Channel;
+
+typedef struct{
+    Channel* items;
+    size_t count, capacity;
+} Channels;
+
 void usage(const char* program){
     printf("[USAGE] %s [-u <public key filepath> <username>] || --help\n", program);
 }
@@ -47,6 +62,8 @@ int main(int argc, char** argv){
     (void)program;
 
     Users users = {0};
+    Servers servers = {0};
+    Channels channels = {0};
 
     while(argc){
         const char* arg = shift_args(&argc, &argv);
@@ -69,6 +86,31 @@ int main(int argc, char** argv){
 
             user.username = shift_args(&argc, &argv);
             da_append(&users, user);
+            continue;
+        }else if(strcmp(arg, "-s") == 0){
+            if(!argc){
+                usage(program);
+                fprintf(stderr, "[ERROR] expected server name\n");
+                return 1;
+            }
+            const char* server_name = shift_args(&argc, &argv);
+            da_append(&servers, server_name);
+            continue;
+        }else if(strcmp(arg, "-ch") == 0){
+            Channel channel = {0};
+            if(!argc){
+                usage(program);
+                fprintf(stderr, "[ERROR] expected server name\n");
+                return 1;
+            }
+            channel.server_name = shift_args(&argc, &argv);
+            if(!argc){
+                usage(program);
+                fprintf(stderr, "[ERROR] expected server name\n");
+                return 1;
+            }
+            channel.channel_name = shift_args(&argc, &argv);
+            da_append(&channels, channel);
             continue;
         }else if(strcmp(arg, "--help") == 0){
             usage(program);
@@ -95,6 +137,8 @@ int main(int argc, char** argv){
     if(e != SQLITE_OK) return -1;
     e = execute_sql(db, "create table if not exists user_handles(handle VARCHAR("STRINGIFY1(MAX_HANDLE_SIZE)") UNIQUE PRIMARY KEY, user_id INTEGER)");
     if(e != SQLITE_OK) return -1;
+   e = execute_sql(db, "create table if not exists servers(server_id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT, server_name text)");
+   if(e != SQLITE_OK) return -1;
 
     String_Builder sb = {0};
     sqlite3_stmt *stmt;
@@ -124,7 +168,43 @@ int main(int argc, char** argv){
         sqlite3_finalize(stmt);
     }
 
+    for(size_t i = 0; i < servers.count; i++){
+        const char* server_name = servers.items[i];
 
+        e = execute_sql(db, temp_sprintf("insert into servers(server_name) values (\"%s\")", server_name));
+        if(e != SQLITE_OK) return -1;
+        size_t serverID = sqlite3_last_insert_rowid(db);
+        e = execute_sql(db, temp_sprintf("create table if not exists server_%lu(channel_id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT, channel_name text)", serverID));
+        if(e != SQLITE_OK) return -1;
+    }
+
+    for(size_t i = 0; i < channels.count; i++){
+        Channel* channel = &channels.items[i];
+
+        e = sqlite3_prepare_v2(db, "select server_id from servers where server_name = ?", -1, &stmt, 0);
+        if(e != SQLITE_OK) return -1;
+
+        e = sqlite3_bind_text(stmt, 1, channel->server_name, strlen(channel->server_name), SQLITE_STATIC);
+        if(e != SQLITE_OK) return -1;
+
+        size_t server_id = ~0u;
+        if(sqlite3_step(stmt) == SQLITE_ROW){
+           server_id = sqlite3_column_int(stmt, 0); 
+        }
+
+        sqlite3_finalize(stmt);
+        if(server_id == ~0u){
+            fprintf(stderr, "[SQL_ERROR] Provided non existent server name %s", channel->server_name);
+            return 1;
+        }
+
+
+        e = execute_sql(db, temp_sprintf("insert into server_%lu(channel_name) values (\"%s\")", server_id, channel->channel_name));
+        if(e != SQLITE_OK) return -1;
+        size_t channel_id = sqlite3_last_insert_rowid(db);
+        e = execute_sql(db, temp_sprintf("create table if not exists server_%lu_%lu(msg_id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT, author_id INTEGER, milis BIGINT, content TEXT)", server_id, channel_id));
+        if(e != SQLITE_OK) return -1;
+    }
 
     sqlite3_close(db);
 

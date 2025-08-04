@@ -26,12 +26,14 @@
 #include "onOkMessage.h"
 #include "onNotification.h"
 #include "onGetChannels.h"
+#include "onGetServers.h"
 #include "onGetMessageBefore.h"
 #include "getUserInfoPacket.h"
 #include "sendMsgRequest.h"
 #include "messagesBefore.h"
 #include "get_author_name.h"
 #include "channel.h"
+#include "servers.h"
 #include "config.h"
 #include "tmprintf.h"
 #include <ctype.h>
@@ -154,6 +156,7 @@ void reader_thread(void* client_void) {
 
 uint32_t active_server_id;
 uint32_t active_channel_id;
+uint32_t looking_at_server_id;
 Messages msgs;
 size_t term_width, term_height;
 StringBuilder prompt = { 0 };
@@ -176,6 +179,8 @@ const char* tab_category_labels[] = {
 enum {
     TAB_LIST_STATE_CATEGORY,
     TAB_LIST_STATE_DMS,
+    TAB_LIST_STATE_SERVERS,
+    TAB_LIST_STATE_SERVER,
 } tab_list_state = TAB_LIST_STATE_CATEGORY;
 
 enum {
@@ -188,6 +193,8 @@ typedef struct {
     size_t len, cap;
 } TabLabels;
 Channels dm_channels = { 0 };
+Channels server_channels = { 0 };
+Servers servers = {0};
 TabLabels tab_labels = { 0 };
 
 void redraw_chat(void) {
@@ -230,6 +237,18 @@ void redraw_chat(void) {
                 da_push(&tab_labels, dm_channels.items[i].name);
             }
             break;
+        case TAB_LIST_STATE_SERVERS:
+            da_reserve(&tab_labels, servers.len);
+            for(size_t i = 0; i < servers.len; ++i) {
+                da_push(&tab_labels, servers.items[i].name);
+            }
+            break;
+        case TAB_LIST_STATE_SERVER:
+            da_reserve(&tab_labels, server_channels.len);
+            for(size_t i = 0; i < server_channels.len; ++i) {
+                da_push(&tab_labels, server_channels.items[i].name);
+            }
+            break;
         }
         UIBox tab_list_inner = uibox_inner(tab_list_box);
         for(size_t i = 0; i < tab_labels.len; ++i) {
@@ -267,8 +286,21 @@ void redraw_chat(void) {
             }
             snprintf(buf, sizeof(buf), "DMs: %s", dming_name);
         }else{
-            fprintf(stderr, "ERROR: Implement server name logic!");
-            abort();
+            char* server_name = "BOGUS";
+            char* channel_name = "BOGUS";
+            for(size_t i = 0; i < servers.len; i++){
+                if(servers.items[i].id == active_server_id){
+                    server_name = servers.items[i].name;
+                    break;
+                }
+            }
+            for(size_t i = 0; i < server_channels.len; i++){
+                if(server_channels.items[i].id == active_channel_id){
+                    channel_name = server_channels.items[i].name;
+                    break;
+                }
+            }
+            snprintf(buf, sizeof(buf), "%s: %s", server_name, channel_name); 
         }
 
         {
@@ -406,7 +438,7 @@ void openChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id){
 }
 
 uint32_t channel_protocol_id = 0;
-void refresh_channels_list(){
+void refresh_dm_channels_list(){
     dm_channels.len = 1; // first element should be * so we dont want to lose it
     uint32_t server_id = 0;
     Request req = {
@@ -421,6 +453,37 @@ void refresh_channels_list(){
     client_write(&client, &req, sizeof(Request));
     server_id = htonl(server_id);
     client_write(&client, &server_id, sizeof(server_id));
+}
+
+void refresh_server_channels_list(uint32_t server_id){
+    server_channels.len = 0;
+    Request req = {
+        .protocol_id = channel_protocol_id,
+        .func_id = 0,
+        .packet_id = allocate_incoming_event(),
+        .packet_len = sizeof(server_id),
+    };
+    incoming_events[req.packet_id].as.onGetChannels.channels = &server_channels; 
+    incoming_events[req.packet_id].onEvent = onGetChannels; 
+    request_hton(&req);
+    client_write(&client, &req, sizeof(Request));
+    server_id = htonl(server_id);
+    client_write(&client, &server_id, sizeof(server_id));
+}
+
+uint32_t servers_protocol_id = 0;
+void refresh_servers_list(){
+    servers.len = 0;
+    Request req = {
+        .protocol_id = servers_protocol_id,
+        .func_id = 0,
+        .packet_id = allocate_incoming_event(),
+        .packet_len = 0,
+    };
+    incoming_events[req.packet_id].as.onGetServers.servers = &servers; 
+    incoming_events[req.packet_id].onEvent = onGetServers;
+    request_hton(&req);
+    client_write(&client, &req, sizeof(Request));
 }
 
 void help(FILE* sink, const char* exe) {
@@ -556,6 +619,7 @@ int main(int argc, const char** argv) {
         else if(strcmp(protocol->name, "notify") == 0) notify_protocol_id = protocol->id;
         else if(strcmp(protocol->name, "user") == 0) user_protocol_id = protocol->id;
         else if(strcmp(protocol->name, "channel") == 0) channel_protocol_id = protocol->id;
+        else if(strcmp(protocol->name, "servers") == 0) servers_protocol_id = protocol->id;
         else if(strcmp(protocol->name, "userHandle") == 0) user_handle_protocol_id = protocol->id;
         free(protocol);
     }
@@ -676,6 +740,7 @@ int main(int argc, const char** argv) {
     }
     active_server_id = ~0;
     active_channel_id = ~0;
+    looking_at_server_id = ~0;
     tab_list = true;
     da_push(&dm_channels, ((Channel){
         .id = 0,
@@ -708,7 +773,10 @@ int main(int argc, const char** argv) {
         client_write(&client, &req, sizeof(Request));
     }
     if(channel_protocol_id) {
-        refresh_channels_list();
+        refresh_dm_channels_list();
+    }
+    if(servers_protocol_id) {
+        refresh_servers_list();
     }
     for(;;) {
         redraw();
@@ -738,12 +806,59 @@ int main(int argc, const char** argv) {
                     if(tab_list_selection == TAB_CATEGORY_DMS) {
                         tab_list_state = TAB_LIST_STATE_DMS;
                         tab_list_selection = 0;
+                    }else if(tab_list_selection == TAB_CATEGORY_SERVERS && servers_protocol_id) {
+                        tab_list_state = TAB_LIST_STATE_SERVERS;
+                        tab_list_selection = 0;
                     }
                     break;
                 case STUI_KEY_UP:
                 case STUI_KEY_DOWN: {
                     uint32_t next_tab_tab_selection = (uint32_t)c == STUI_KEY_UP ? tab_list_selection - 1 : tab_list_selection + 1;
                     if(next_tab_tab_selection < TAB_CATEGORIES_COUNT) tab_list_selection = next_tab_tab_selection;
+                } break;
+                }
+                break;
+            case TAB_LIST_STATE_SERVER:
+                switch(c) {
+                case '\n':
+                    if(looking_at_server_id == ~0u) break;
+                    uint32_t channel_id = server_channels.items[tab_list_selection].id;
+                    active_server_id = looking_at_server_id;
+                    active_channel_id = channel_id;
+                    openChannel(&msgs, active_server_id, active_channel_id);
+                    break;
+                case STUI_KEY_ESC:
+                case 'b':
+                case 'B':
+                    tab_list_state = TAB_LIST_STATE_SERVERS;
+                    tab_list_selection = 0;
+                    looking_at_server_id = ~0u;
+                    break;
+                case STUI_KEY_UP:
+                case STUI_KEY_DOWN: {
+                    uint32_t next_tab_tab_selection = (uint32_t)c == STUI_KEY_UP ? tab_list_selection - 1 : tab_list_selection + 1;
+                    if(next_tab_tab_selection < dm_channels.len) tab_list_selection = next_tab_tab_selection;
+                } break;
+                }
+                break;
+            case TAB_LIST_STATE_SERVERS:
+                switch(c) {
+                case '\n':
+                    tab_list_state = TAB_LIST_STATE_SERVER;
+                    looking_at_server_id = servers.items[tab_list_selection].id;
+                    refresh_server_channels_list(looking_at_server_id);
+                    tab_list_selection = 0;
+                    break;
+                case STUI_KEY_ESC:
+                case 'b':
+                case 'B':
+                    tab_list_state = TAB_LIST_STATE_CATEGORY;
+                    tab_list_selection = 0;
+                    break;
+                case STUI_KEY_UP:
+                case STUI_KEY_DOWN: {
+                    uint32_t next_tab_tab_selection = (uint32_t)c == STUI_KEY_UP ? tab_list_selection - 1 : tab_list_selection + 1;
+                    if(next_tab_tab_selection < dm_channels.len) tab_list_selection = next_tab_tab_selection;
                 } break;
                 }
                 break;
@@ -824,7 +939,7 @@ int main(int argc, const char** argv) {
                         client_write(&client, prompt.items, prompt.len);
                         prompt.len = 0;
 
-                        if(msgs.len == 0 && active_server_id == 0) refresh_channels_list();
+                        if(msgs.len == 0 && active_server_id == 0) refresh_dm_channels_list();
                     } break;
 
                     case APP_STATE_PROMPT: {

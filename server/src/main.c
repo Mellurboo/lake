@@ -20,10 +20,16 @@
 // Global variables
 DbContext* db = NULL;
 UserMap user_map = { 0 };
+struct list_head global_client_refs;
 
 void client_thread(void* fd_void) {
     Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0, .secure = false};
+    ClientRef client_ref = {
+        .client = &client
+    };
     list_init(&client.list);
+    list_init(&client_ref.list);
+    list_insert(&global_client_refs, &client_ref.list); 
     Request header;
     for(;;) {
         int n = client_read(&client, &header, sizeof(header));
@@ -52,12 +58,14 @@ void client_thread(void* fd_void) {
         proto->funcs[header.func_id](&client, &header);
     }
     list_remove(&client.list);
+    list_remove(&client_ref.list);
     closesocket(client.fd);
     info("%d: Disconnected!", client.fd);
 }
 #define PORT 6969
 int main(void) {
     gtinit();
+    list_init(&global_client_refs);
     if(DbContext_init(&db) < 0){
         error("Couldn't initialize database context\n");
         return 1;

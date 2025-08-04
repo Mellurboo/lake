@@ -32,6 +32,7 @@ void notification_hton(Notification* packet) {
     packet->milis_high = htonl(packet->milis_high);
 }
 
+extern struct list_head global_client_refs;
 
 #define MAX_MESSAGE 10000
 typedef struct {
@@ -92,10 +93,13 @@ void sendMsg(Client* client, Request* header) {
     if(packet.server_id == 0){
         da_push(&participants, client->userID);
         da_push(&participants, packet.channel_id);
-        //TODO: notifications       
     }else{
-        //TODO: we assert its DMs
-        assert(false && "TODO: everything other than DMs");
+        list_foreach(client_node, &global_client_refs) {
+            ClientRef* other_ref = (ClientRef*)client_node;
+            Client* other = other_ref->client;
+            if(!other->secure) continue;
+            da_push(&participants, other->userID);
+        }
     }
     for(size_t i = 0; i < participants.len; ++i) {
         UserMapBucket* user = user_map_get(&user_map, participants.items[i]);

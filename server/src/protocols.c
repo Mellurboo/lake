@@ -8,6 +8,7 @@
 #include "protocols/user.h"
 #include "protocols/channel.h"
 #include "protocols/userHandle.h"
+#include "protocols/servers.h"
 
 Protocol* protocols[] = {
     &coreProtocol,
@@ -20,6 +21,7 @@ Protocol* protocols[] = {
     &userProtocol,
     &channelProtocol,
     &userHandleProtocol,
+    &serversProtocol,
 };
 size_t protocols_count = ARRAY_LEN(protocols);
 
