@@ -309,7 +309,7 @@ void* gtswitch(void* sp) {
         // TODO: maybe allow threads to register a timeout.
         // for our purposes its fine but in general it might be useful :)
         if(gtlist_empty(&scheduler.queue)) timeout = -1;
-        while(gtlist_empty(&scheduler.queue)) {
+        do {
             struct epoll_event events[128];
             int n;
             do {
@@ -351,7 +351,7 @@ void* gtswitch(void* sp) {
                 // gtlist_remove(&ethread->list);
                 // gtlist_insert(&ethread->list, &scheduler.queue);
             }
-        }
+        } while(gtlist_empty(&scheduler.queue));
     }
     GThread* thread = (GThread*)gtlist_next(&scheduler.queue);
     gtlist_remove(&thread->list);
