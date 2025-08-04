@@ -290,7 +290,7 @@ void redraw_chat(void) {
     }
 }
 
-void redraw_prompt(void){
+void redraw_prompt(const char* prompt_message){
     for(size_t y = 0; y < term_height; ++y) {
         for(size_t x = 0; x < term_width; ++x) {
             stui_putchar(x, y, ' ');
@@ -310,8 +310,6 @@ void redraw_prompt(void){
     };
 
     uibox_draw_border(input_box, '=', '|', '+');
-
-    const char* prompt_message = "Provide User ID";
 
     size_t prompt_len = strlen(prompt_message);
     for(size_t i = 0; i < prompt_len; i++){
@@ -334,7 +332,7 @@ void redraw_prompt(void){
 void redraw(void){
     switch(app_state){
         case APP_STATE_CHAT: redraw_chat(); break;
-        case APP_STATE_PROMPT: redraw_prompt(); break;
+        case APP_STATE_PROMPT: redraw_prompt("Provide User ID"); break;
     }
 }
 
