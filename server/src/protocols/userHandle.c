@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include "db_context.h"
 #include "error.h"
+#include "log.h"
 
 extern DbContext* db;
 void userGetUserIdFromHandle(Client* client, Request* header) {
@@ -16,10 +17,10 @@ void userGetUserIdFromHandle(Client* client, Request* header) {
     }
     intptr_t e = client_read(client, handle, header->packet_len);
     if(e <= 0) return;
-
-    uint32_t id;
+    uint32_t id = 0;
     e = DbContext_get_user_id_from_handle(db, handle, header->packet_len, &id);
-    if(e < 0) {
+    if(e < 0 || id == 0) {
+        error("%d: Invalid handle `%.*s`", client->fd, (int)header->packet_len, handle);
         client_write_error(client, header->packet_id, ERROR_DB);
         return;
     }
@@ -31,6 +32,7 @@ void userGetUserIdFromHandle(Client* client, Request* header) {
     response_hton(&response);
     e = client_write(client, &response, sizeof(response));
     if(e <= 0) return;
+    id = htonl(id);
     client_write(client, &id, sizeof(id));
 }
 
