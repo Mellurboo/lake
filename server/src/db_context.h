@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#define MAX_HANDLE_SIZE 64
 typedef struct {
     size_t content_len;
     char* content;
@@ -39,3 +40,4 @@ int DbContext_get_username_from_user_id(DbContext* db, uint32_t user_id, char** 
 int DbContext_send_msg(DbContext* db, uint32_t server_id, uint32_t channel_id, uint32_t author_id, const char* content, size_t content_len, uint64_t milis);
 int DbContext_get_msgs_before(DbContext* db, uint32_t server_id, uint32_t channel_id, uint32_t author_id, uint64_t milis, uint32_t limit, Messages* msgs);
 int DbContext_get_channels(DbContext* db, uint32_t server_id, uint32_t author_id, Channels* channels);
+int DbContext_get_user_id_from_handle(DbContext* db, const char* handle, size_t handle_len, uint32_t* user_id);

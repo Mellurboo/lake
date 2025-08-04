@@ -38,15 +38,19 @@ struct DbContext{
     sqlite3* db;
 };
 
+#define STRINGIFY0(x) # x
+#define STRINGIFY1(x) STRINGIFY0(x)
 int DbContext_init(DbContext** dbOut){
    DbContext* db = calloc(1, sizeof(DbContext));
    int e = sqlite3_open("database.db",&db->db);
    if(e != SQLITE_OK) return -1;
-   e = execute_sql(db->db, "create table if not exists public_keys(key blob, user_id INTEGER, PRIMARY KEY(key), FOREIGN KEY(user_id) REFERENCES users(id));");
+   e = execute_sql(db->db, "create table if not exists public_keys(key blob, user_id INTEGER, PRIMARY KEY(key), FOREIGN KEY(user_id) REFERENCES users(user_id));");
    if(e != SQLITE_OK) return -1;
    e = execute_sql(db->db, "create table if not exists users(user_id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT, username text);");
    if(e != SQLITE_OK) return -1;
    e = execute_sql(db->db, "create table if not exists dms(min_user_id INTEGER, max_user_id INTEGER)");
+   if(e != SQLITE_OK) return -1;
+   e = execute_sql(db->db, "create table if not exists user_handles(handle VARCHAR("STRINGIFY1(MAX_HANDLE_SIZE)") UNIQUE PRIMARY KEY, user_id INTEGER)");
    if(e != SQLITE_OK) return -1;
 
    *dbOut = db;
@@ -253,6 +257,22 @@ int DbContext_get_channels(DbContext* db, uint32_t server_id, uint32_t author_id
     //TODO: we assert its DMs
     assert(false && "TODO: everything other than DMs");
     return 0;
+}
+int DbContext_get_user_id_from_handle(DbContext* db, const char* handle, size_t handle_len, uint32_t* user_id) {
+    sqlite3_stmt *stmt;
+    int e = sqlite3_prepare_v2(db->db, "select user_id from user_handles where handle = ?", -1, &stmt, NULL);
+    if(e != SQLITE_OK) return -1;
+    e = sqlite3_bind_text(stmt, 1, handle, handle_len, SQLITE_STATIC);
+    if(e != SQLITE_OK) goto sqlite_bind_err;
+    // NOTE: assumes step does not fail
+    if(sqlite3_step(stmt) == SQLITE_ROW) {
+        *user_id = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return 0;
+sqlite_bind_err:
+    sqlite3_finalize(stmt);
+    return -1;
 }
 void free_channel(Channel* channel) {
     free(channel->name);
