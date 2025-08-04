@@ -52,7 +52,7 @@ typedef struct{
 } Channels;
 
 void usage(const char* program){
-    printf("[USAGE] %s [-u <public key filepath> <username>] || --help\n", program);
+    printf("[USAGE] %s [-u <public key filepath> <username> || -s <new server name> || -ch <server name> <new channel name>] || --help\n", program);
 }
 #define MAX_HANDLE_SIZE 64
 #define STRINGIFY0(x) # x
