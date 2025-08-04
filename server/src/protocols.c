@@ -7,6 +7,7 @@
 #include "protocols/notify.h"
 #include "protocols/user.h"
 #include "protocols/channel.h"
+#include "protocols/userHandle.h"
 
 Protocol* protocols[] = {
     &coreProtocol,
@@ -18,6 +19,7 @@ Protocol* protocols[] = {
     &notifyProtocol,
     &userProtocol,
     &channelProtocol,
+    &userHandleProtocol,
 };
 size_t protocols_count = ARRAY_LEN(protocols);
 
