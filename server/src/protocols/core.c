@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 
 void coreGetProtocols(Client* client, Request* header) {
+    // FIXME: check size
     for(size_t i = 0; i < protocols_count; ++i) {
         Response res_header;
         res_header.packet_id = header->packet_id;
