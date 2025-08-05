@@ -12,6 +12,7 @@
 #include "time_unix.h"
 #include "darray.h"
 #include "user_map.h"
+#include <string.h>
 
 extern DbContext* db;
 extern UserMap user_map;
@@ -90,10 +91,10 @@ void sendMsg(Client* client, Request* header) {
     if(e < 0) return;
 
     Participants participants = { 0 };
-    if(packet.server_id == 0){
+    if(packet.server_id == 0) {
         da_push(&participants, client->userID);
         da_push(&participants, packet.channel_id);
-    }else{
+    } else {
         list_foreach(client_node, &global_client_refs) {
             ClientRef* other_ref = (ClientRef*)client_node;
             Client* other = other_ref->client;
@@ -101,6 +102,8 @@ void sendMsg(Client* client, Request* header) {
             da_push(&participants, other->userID);
         }
     }
+
+    char* tmp_msg_clone = malloc(msg_len);
     for(size_t i = 0; i < participants.len; ++i) {
         UserMapBucket* user = user_map_get(&user_map, participants.items[i]);
         if(!user) continue;
@@ -125,9 +128,11 @@ void sendMsg(Client* client, Request* header) {
             // TODO: don't block here? And/or spawn a gt thread for each user we're notifying
             client_write(user_conn, &resp, sizeof(Response));
             client_write(user_conn, &notif, sizeof(Notification));
-            client_write(user_conn, msg, msg_len);
+            memcpy(tmp_msg_clone, msg, msg_len);
+            client_write(user_conn, tmp_msg_clone, msg_len);
         }
     }
+    free(tmp_msg_clone);
     free(participants.items);
     /*
     for(size_t i = 0; i < channel->participants.len; ++i) {
