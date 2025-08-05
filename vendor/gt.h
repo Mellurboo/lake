@@ -436,7 +436,7 @@ void gtmutex_lock(GTMutex* mutex) {
         gtlist_remove(&thread->list);
         gtlist_insert(&mutex->list, &thread->list);
         gtyield();
-    }
+    } else mutex->lock = true;
 }
 void gtmutex_unlock(GTMutex* mutex) {
     GThread* blocking_thread = (GThread*)gtlist_next(&mutex->list);
