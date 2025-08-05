@@ -951,7 +951,6 @@ int main(int argc, const char** argv) {
                                     .packet_id = allocate_incoming_event(),
                                     .packet_len = prompt.len - 1
                                 };
-                                bucket->in_progress = true;
                                 GTMutex tmp_mutex;
                                 gtmutex_init(&tmp_mutex);
                                 gtmutex_lock(&tmp_mutex);

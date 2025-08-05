@@ -7,7 +7,6 @@ typedef struct HandleMapBucket HandleMapBucket;
 struct HandleMapBucket {
     HandleMapBucket* next;
     uint32_t user_id;
-    bool in_progress;
     size_t handle_hash;
     char handle[];
 };
