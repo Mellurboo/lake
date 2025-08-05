@@ -165,14 +165,12 @@ uint16_t tab_list_selection = 0;
 
 enum {
     TAB_CATEGORY_DMS,
-    TAB_CATEGORY_GROUP_CHATS,
     TAB_CATEGORY_SERVERS,
     TAB_CATEGORIES_COUNT
 };
-static_assert(TAB_CATEGORIES_COUNT == 3, "Update tab category labels");
+static_assert(TAB_CATEGORIES_COUNT == 2, "Update tab category labels");
 const char* tab_category_labels[] = {
     [TAB_CATEGORY_DMS] = "DMS",
-    [TAB_CATEGORY_GROUP_CHATS] = "Group Chats",
     [TAB_CATEGORY_SERVERS] = "Servers",
 };
 
@@ -784,10 +782,6 @@ int main(int argc, const char** argv) {
                 case 'D':
                 case 'd':
                     tab_list_selection = TAB_CATEGORY_DMS;
-                    break;
-                case 'G':
-                case 'g':
-                    tab_list_selection = TAB_CATEGORY_GROUP_CHATS;
                     break;
                 case 'S':
                 case 's':
