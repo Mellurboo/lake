@@ -438,37 +438,28 @@ void openChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id){
 }
 
 uint32_t channel_protocol_id = 0;
-void refresh_dm_channels_list(){
-    dm_channels.len = 1; // first element should be * so we dont want to lose it
-    uint32_t server_id = 0;
+void refresh_channels(Channels* channels, uint32_t server_id) {
     Request req = {
         .protocol_id = channel_protocol_id,
         .func_id = 0,
         .packet_id = allocate_incoming_event(),
         .packet_len = sizeof(server_id),
     };
-    incoming_events[req.packet_id].as.onGetChannels.channels = &dm_channels; 
+    incoming_events[req.packet_id].as.onGetChannels.channels = channels; 
     incoming_events[req.packet_id].onEvent = onGetChannels; 
     request_hton(&req);
     client_write(&client, &req, sizeof(Request));
     server_id = htonl(server_id);
     client_write(&client, &server_id, sizeof(server_id));
 }
+static void refresh_dm_channels_list(){
+    dm_channels.len = 1; // first element should be * so we dont want to lose it
+    refresh_channels(&dm_channels, 0);
+}
 
-void refresh_server_channels_list(uint32_t server_id){
+static void refresh_server_channels_list(uint32_t server_id){
     server_channels.len = 0;
-    Request req = {
-        .protocol_id = channel_protocol_id,
-        .func_id = 0,
-        .packet_id = allocate_incoming_event(),
-        .packet_len = sizeof(server_id),
-    };
-    incoming_events[req.packet_id].as.onGetChannels.channels = &server_channels; 
-    incoming_events[req.packet_id].onEvent = onGetChannels; 
-    request_hton(&req);
-    client_write(&client, &req, sizeof(Request));
-    server_id = htonl(server_id);
-    client_write(&client, &server_id, sizeof(server_id));
+    refresh_channels(&server_channels, server_id);
 }
 
 uint32_t servers_protocol_id = 0;
