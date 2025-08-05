@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
 typedef struct gtlist_head gtlist_head;
 struct gtlist_head {
     gtlist_head *next, *prev;
@@ -24,8 +25,18 @@ GThread* gthread_current(void);
 #define GTBLOCKOUT (1 << 1)
 void gtblockfd(unsigned int fd, uint32_t events);
 
+// TODO: atomic_bool for when we have hardware-threaded gt supported
+typedef struct {
+    bool lock;
+    gtlist_head list; // <- Threads blocking on mutex
+} GTMutex;
+void gtmutex_init(GTMutex* mutex);
+void gtmutex_lock(GTMutex* mutex);
+void gtmutex_unlock(GTMutex* mutex);
+#define gtmutex_scoped(__mutex) for(int _once_counter = (gtmutex_lock(__mutex), 0); _once_counter < 1; _once_counter++, gtmutex_unlock(__mutex))
+
+
 #ifdef GT_IMPLEMENTATION
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -414,5 +425,24 @@ void gtinit(void) {
     gtlist_init(&main_thread->list);
     gtlist_insert(&scheduler.queue, &main_thread->list);
     scheduler.thread_current = main_thread;
+}
+void gtmutex_init(GTMutex* mutex) {
+    mutex->lock = false;
+    gtlist_init(&mutex->list);
+}
+void gtmutex_lock(GTMutex* mutex) {
+    if(mutex->lock) {
+        GThread* thread = gthread_current();
+        gtlist_remove(&thread->list);
+        gtlist_insert(&mutex->list, &thread->list);
+        gtyield();
+    }
+}
+void gtmutex_unlock(GTMutex* mutex) {
+    GThread* blocking_thread = (GThread*)gtlist_next(&mutex->list);
+    if(blocking_thread) {
+        gtlist_remove(&blocking_thread->list);
+        gtlist_insert(&scheduler.queue, &blocking_thread->list);
+    } else mutex->lock = false;
 }
 #endif
