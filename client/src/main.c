@@ -952,15 +952,17 @@ int main(int argc, const char** argv) {
                                     .packet_len = prompt.len - 1
                                 };
                                 bucket->in_progress = true;
+                                GTMutex tmp_mutex;
+                                gtmutex_init(&tmp_mutex);
+                                gtmutex_lock(&tmp_mutex);
                                 incoming_events[request.packet_id].as.onUserHandle.bucket = bucket;
+                                incoming_events[request.packet_id].as.onUserHandle.mutex = &tmp_mutex;
                                 incoming_events[request.packet_id].onEvent = onUserHandle;
+
                                 request_hton(&request);
                                 client_write(&client, &request, sizeof(request));
                                 client_write(&client, prompt.items, prompt.len - 1);
-                                // TODO: unspinlock this shit
-                                while(bucket->in_progress) {
-                                    gtyield();
-                                }
+                                gtmutex_lock(&tmp_mutex);
                             }
                             if(bucket->user_id == 0) free(handle_map_remove(&handle_map, bucket->handle));
                             else dm_id = bucket->user_id;

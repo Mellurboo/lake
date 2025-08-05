@@ -7,6 +7,7 @@
 #define MAX_INCOMING_EVENTS 128
 typedef struct Channels Channels;
 typedef struct Servers Servers;
+typedef struct GTMutex GTMutex;
 typedef struct IncomingEvent IncomingEvent;
 typedef struct HandleMapBucket HandleMapBucket;
 typedef struct { Messages* msgs; Message msg; } OnMessage;
@@ -15,7 +16,7 @@ typedef struct { UserMapBucket* user; } OnUserInfo;
 typedef struct { Channels* channels; } OnGetChannels;
 typedef struct { Servers* servers; } OnGetServers;
 typedef struct { Messages* msgs; } OnGetMessagesBefore;
-typedef struct { HandleMapBucket* bucket; } OnUserHandle;
+typedef struct { HandleMapBucket* bucket; GTMutex* mutex; } OnUserHandle;
 typedef void (*event_handler_t)(Client* client, Response* response, IncomingEvent* event);
 struct IncomingEvent {
     event_handler_t onEvent;
