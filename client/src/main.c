@@ -822,7 +822,7 @@ int main(int argc, const char** argv) {
                 case STUI_KEY_UP:
                 case STUI_KEY_DOWN: {
                     uint32_t next_tab_tab_selection = (uint32_t)c == STUI_KEY_UP ? tab_list_selection - 1 : tab_list_selection + 1;
-                    if(next_tab_tab_selection < dm_channels.len) tab_list_selection = next_tab_tab_selection;
+                    if(next_tab_tab_selection < server_channels.len) tab_list_selection = next_tab_tab_selection;
                 } break;
                 }
                 break;
@@ -843,7 +843,7 @@ int main(int argc, const char** argv) {
                 case STUI_KEY_UP:
                 case STUI_KEY_DOWN: {
                     uint32_t next_tab_tab_selection = (uint32_t)c == STUI_KEY_UP ? tab_list_selection - 1 : tab_list_selection + 1;
-                    if(next_tab_tab_selection < dm_channels.len) tab_list_selection = next_tab_tab_selection;
+                    if(next_tab_tab_selection < servers.len) tab_list_selection = next_tab_tab_selection;
                 } break;
                 }
                 break;
