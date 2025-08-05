@@ -26,7 +26,7 @@ GThread* gthread_current(void);
 void gtblockfd(unsigned int fd, uint32_t events);
 
 // TODO: atomic_bool for when we have hardware-threaded gt supported
-typedef struct {
+typedef struct GTMutex {
     bool lock;
     gtlist_head list; // <- Threads blocking on mutex
 } GTMutex;
