@@ -13,6 +13,7 @@
 #include "darray.h"
 #include "user_map.h"
 #include <string.h>
+#include "error.h"
 
 extern DbContext* db;
 extern UserMap user_map;
@@ -62,7 +63,7 @@ void sendMsg(Client* client, Request* header) {
             .packet_len = 0
         };
         response_hton(&resp);
-        client_write(client, &resp, sizeof(Response));
+        client_write_error(client, header->packet_id, ERROR_INVALID_PACKET_LEN);
         return;
     }
     SendMsgPacket packet = { 0 };
@@ -125,11 +126,13 @@ void sendMsg(Client* client, Request* header) {
                 .milis_high = message.milis >> 32,
             };
             notification_hton(&notif);
-            // TODO: don't block here? And/or spawn a gt thread for each user we're notifying
-            client_write(user_conn, &resp, sizeof(Response));
-            client_write(user_conn, &notif, sizeof(Notification));
+
             memcpy(tmp_msg_clone, msg, msg_len);
-            client_write(user_conn, tmp_msg_clone, msg_len);
+            client_write_scoped(client) {
+                client_write(user_conn, &resp, sizeof(Response));
+                client_write(user_conn, &notif, sizeof(Notification));
+                client_write(user_conn, tmp_msg_clone, msg_len);
+            }
         }
     }
     free(tmp_msg_clone);
@@ -169,7 +172,7 @@ void sendMsg(Client* client, Request* header) {
         .packet_len = 0
     };
     response_hton(&resp);
-    client_write(client, &resp, sizeof(resp));
+    client_write_scoped(client) client_write(client, &resp, sizeof(resp));
     return;
 err_read:
     free(msg);
@@ -230,10 +233,11 @@ void getMsgsBefore(Client* client, Request* header) {
         };
         response_hton(&resp);
         messagesBeforeResponse_hton(&msg_resp);
-        client_write(client, &resp, sizeof(resp));
-        client_write(client, &msg_resp, sizeof(msg_resp));
-        client_write(client, msg->content, msg->content_len);
-
+        client_write_scoped(client) {
+            client_write(client, &resp, sizeof(resp));
+            client_write(client, &msg_resp, sizeof(msg_resp));
+            client_write(client, msg->content, msg->content_len);
+        }
         free(msg->content);
     } 
 finish:
@@ -244,7 +248,8 @@ finish:
         .packet_len = 0,
     };
     response_hton(&resp);
-    client_write(client, &resp, sizeof(resp));
+
+    client_write_scoped(client) client_write(client, &resp, sizeof(resp));
 err_read0:
     return;
 }

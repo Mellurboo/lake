@@ -30,10 +30,11 @@ void userGetUserIdFromHandle(Client* client, Request* header) {
         .packet_len = sizeof(id),
     };
     response_hton(&response);
-    e = client_write(client, &response, sizeof(response));
-    if(e <= 0) return;
     id = htonl(id);
-    client_write(client, &id, sizeof(id));
+    client_write_scoped(client) {
+        client_write(client, &response, sizeof(response));
+        client_write(client, &id, sizeof(id));
+    }
 }
 
 protocol_func_t userHandleProtocolFuncs[] = {

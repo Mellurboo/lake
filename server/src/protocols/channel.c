@@ -31,7 +31,8 @@ void getChannels(Client* client, Request* header) {
             .packet_len = 0
         };
         response_hton(&resp);
-        client_write(client, &resp, sizeof(Response));
+
+        client_write_scoped(client) client_write(client, &resp, sizeof(Response));
         return;
     }
     GetChannelsRequest request = { 0 };
@@ -50,13 +51,16 @@ void getChannels(Client* client, Request* header) {
             .packet_len = sizeof(GetChannelsResponse) + strlen(channel->name)
         };
         response_hton(&resp_header);
-        client_write(client, &resp_header, sizeof(resp_header));
+
         GetChannelsResponse get_channels_response = {
             .channel_id = channel->id
         };
         get_channels_response.channel_id = htonl(get_channels_response.channel_id);
-        client_write(client, &get_channels_response, sizeof(get_channels_response));
-        client_write(client, channel->name, strlen(channel->name));
+        client_write_scoped(client) {
+            client_write(client, &resp_header, sizeof(resp_header));
+            client_write(client, &get_channels_response, sizeof(get_channels_response));
+            client_write(client, channel->name, strlen(channel->name));
+        }
     }
     Response resp_header = {
         .packet_id = header->packet_id,
@@ -64,20 +68,14 @@ void getChannels(Client* client, Request* header) {
         .packet_len = 0 
     };
     response_hton(&resp_header);
-    client_write(client, &resp_header, sizeof(resp_header));
+
+    client_write_scoped(client) client_write(client, &resp_header, sizeof(resp_header));
     free_channels(&channels);
     return;
     /*Start responding with some shezung*/
 err_get_channels:
     free_channels(&channels);
 err_read:
-    Response resp = {
-        .packet_id = header->packet_id,
-        .opcode = 1,
-        .packet_len = 0
-    };
-    response_hton(&resp);
-    client_write(client, &resp, sizeof(Response));
     return;
 }
 protocol_func_t channelProtocolFuncs[] = {

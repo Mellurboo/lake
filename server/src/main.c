@@ -24,6 +24,8 @@ struct list_head global_client_refs;
 
 void client_thread(void* fd_void) {
     Client client = {.fd = (uintptr_t)fd_void, .userID = ~0, .notifyID = ~0, .secure = false};
+    gtmutex_init(&client.write_mutex);
+    gtmutex_init(&client.read_mutex);
     ClientRef client_ref = {
         .client = &client
     };

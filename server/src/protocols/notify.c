@@ -14,7 +14,7 @@ void notify(Client* client, Request* header) {
         .packet_len = 0,
     };
     response_hton(&resp);
-    client_write(client, &resp, sizeof(resp));
+    client_write_scoped(client) client_write(client, &resp, sizeof(resp));
 }
 protocol_func_t notifyProtocolFuncs[] = {
     notify,

@@ -30,13 +30,15 @@ void authListModes(Client* client, Request* header) {
             .packet_len = sizeof(uint32_t) + strlen(authModes[i]) 
         };
         response_hton(&resp);
-        client_write(client, &resp, sizeof(resp));
         uint32_t id = i + 1;
         id = htonl(id);
-        client_write(client, &id, sizeof(id));
         char buf[100];
         strncpy(buf, authModes[i], sizeof(buf));
-        client_write(client, buf, strlen(buf));
+        client_write_scoped(client) {
+            client_write(client, &resp, sizeof(resp));
+            client_write(client, &id, sizeof(id));
+            client_write(client, buf, strlen(buf));
+        }
     }
     Response resp = {
         .packet_id = header->packet_id,
@@ -44,7 +46,7 @@ void authListModes(Client* client, Request* header) {
         .packet_len = 0 
     };
     response_hton(&resp);
-    client_write(client, &resp, sizeof(resp));
+    client_write_scoped(client) client_write(client, &resp, sizeof(resp));
 }
 // FIXME: all these fucking memory leaks :(((
 void authAuthenticate(Client* client, Request* header){
@@ -83,8 +85,11 @@ void authAuthenticate(Client* client, Request* header){
         .packet_len = KYBER_CIPHERTEXTBYTES + RAND_COUNT
     };
     response_hton(&test);
-    client_write(client, &test, sizeof(test));
-    client_write(client, ct, KYBER_CIPHERTEXTBYTES + RAND_COUNT);
+
+    client_write_scoped(client) {
+        client_write(client, &test, sizeof(test));
+        client_write(client, ct, KYBER_CIPHERTEXTBYTES + RAND_COUNT);
+    }
     free(ct);
 
     Request req;
@@ -117,9 +122,12 @@ void authAuthenticate(Client* client, Request* header){
     res_header.opcode = 0;
     res_header.packet_len = sizeof(uint32_t);
     response_hton(&res_header);
-    client_write(client, &res_header, sizeof(res_header));
     userID = htonl(userID);
-    client_write(client, &userID, sizeof(userID));
+
+    client_write_scoped(client) {
+        client_write(client, &res_header, sizeof(res_header));
+        client_write(client, &userID, sizeof(userID));
+    }
 
     client->secure = true;
 }

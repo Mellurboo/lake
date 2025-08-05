@@ -8,6 +8,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
+#include "error.h"
 
 typedef struct {
     uint32_t server_id;
@@ -17,13 +18,7 @@ extern DbContext* db;
 void getServers(Client* client, Request* header) {
     if(header->packet_len > 0) {
         client_discard(client, header->packet_len);
-        Response resp = {
-            .packet_id = header->packet_id,
-            .opcode = 1,
-            .packet_len = 0
-        };
-        response_hton(&resp);
-        client_write(client, &resp, sizeof(Response));
+        client_write_error(client, header->packet_id, ERROR_INVALID_PACKET_LEN);
         return;
     }
 
@@ -60,15 +55,7 @@ void getServers(Client* client, Request* header) {
     return;
 err_get_servers:
     free_servers(&servers);
-    {
-        Response resp = {
-            .packet_id = header->packet_id,
-            .opcode = 1,
-            .packet_len = 0
-        };
-        response_hton(&resp);
-        client_write(client, &resp, sizeof(Response));
-    }
+    client_write_error(client, header->packet_id, ERROR_DB);
     return;
 }
 

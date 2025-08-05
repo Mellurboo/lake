@@ -14,8 +14,10 @@ void echoEcho(Client* client, Request* header) {
         .packet_len = header->packet_len
     };
     response_hton(&resp);
-    client_write(client, &resp, sizeof(resp));
-    client_write(client, buf, header->packet_len);
+    client_write_scoped(client) {
+        client_write(client, &resp, sizeof(resp));
+        client_write(client, buf, header->packet_len);
+    }
 }
 protocol_func_t echoProtocolFuncs[] = {
     echoEcho,
