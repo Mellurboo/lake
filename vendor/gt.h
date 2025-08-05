@@ -9,7 +9,7 @@ struct gtlist_head {
 // I'm not entirely sure tho
 typedef struct {
     gtlist_head list;
-    void* sp;
+    void *sp, *sp_base;
     // Entry point + argument
     void (*entry)(void*);
     void *arg;
@@ -280,34 +280,39 @@ static void* gtsetup_frame(void* sp_void) {
 // End Architecture specific
 #define GT_STACK_SIZE (4 * 4096)
 // TODO: Maybe handle out of memory gracefully? I'm not too sure
-// TODO: Reuse threads from dead
 void gtgo(void (*entry)(void* arg), void* arg) {
-    GThread* thread =  malloc(sizeof(GThread));
-    assert(thread && "Ran out of memory");
-#ifdef _MINOS
-    intptr_t e = heap_create(0, NULL, GT_STACK_SIZE);
-    assert(e >= 0 && "Ran out of memory");
-    MinOSHeap heap = { 0 };
-    assert(heap_get((uintptr_t)e, &heap) >= 0);
-    // Stack grows backwards:
-    thread->sp = heap.address + heap.size; 
-#elif _WIN32
-    thread->sp = VirtualAlloc(NULL, GT_STACK_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (thread->sp == NULL) {
-        fprintf(stderr, "VirtualAlloc failed: %lu\n", GetLastError());
-        exit(1);
+    GThread* thread;
+    if(gtlist_empty(&scheduler.dead)) {
+        thread = malloc(sizeof(GThread));
+        assert(thread && "Ran out of memory");
+        gtlist_init(&thread->list);
+    #ifdef _MINOS
+        intptr_t e = heap_create(0, NULL, GT_STACK_SIZE);
+        assert(e >= 0 && "Ran out of memory");
+        MinOSHeap heap = { 0 };
+        assert(heap_get((uintptr_t)e, &heap) >= 0);
+        // Stack grows backwards:
+        thread->sp_base = heap.address + heap.size; 
+    #elif _WIN32
+        thread->sp_base = VirtualAlloc(NULL, GT_STACK_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (thread->sp == NULL) {
+            fprintf(stderr, "VirtualAlloc failed: %lu\n", GetLastError());
+            exit(1);
+        }
+        thread->sp_base = (char*)thread->sp + GT_STACK_SIZE;
+    #else
+        thread->sp_base = mmap(NULL, GT_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if(thread->sp == MAP_FAILED) {
+            perror("mmap stack");
+            exit(1);
+        }
+        thread->sp_base += GT_STACK_SIZE;
+    #endif
+    } else {
+        thread = (GThread*)scheduler.dead.next;
+        gtlist_remove(&thread->list);
     }
-    thread->sp = (char*)thread->sp + GT_STACK_SIZE;
-#else
-    thread->sp = mmap(NULL, GT_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if(thread->sp == MAP_FAILED) {
-        perror("mmap stack");
-        exit(1);
-    }
-    thread->sp += GT_STACK_SIZE;
-#endif
-    thread->sp = gtsetup_frame(thread->sp);
-    gtlist_init(&thread->list);
+    thread->sp = gtsetup_frame(thread->sp_base);
     thread->entry = entry;
     thread->arg = arg;
     gtlist_insert(&scheduler.queue, &thread->list);
