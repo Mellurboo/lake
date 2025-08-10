@@ -10,6 +10,8 @@
 void onNotification(Client* client, Response* response, IncomingEvent* event) {
     // SKIP
     if(response->packet_len == 0) return;
+    printf("\a");
+    fflush(stdout);
     assert(response->opcode == 0);
     assert(response->packet_len > sizeof(Notification));
     Notification notif;
