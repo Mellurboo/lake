@@ -196,6 +196,7 @@ Servers servers = {0};
 TabLabels tab_labels = { 0 };
 
 void redraw_chat(void) {
+    size_t cursor_x = 0, cursor_y = 0; 
     bool notCHATING = active_server_id == ~0u || active_channel_id == ~0u || active_channel_id == 0;
 
     for(size_t y = 0; y < term_height; ++y) {
@@ -265,8 +266,8 @@ void redraw_chat(void) {
                 label++;
             }
         }
-        stui_refresh();
-        stui_goto(uibox_inner(tab_list_box).l, uibox_inner(tab_list_box).t + tab_list_selection);
+        cursor_x = uibox_inner(tab_list_box).l;
+        cursor_y = uibox_inner(tab_list_box).t + tab_list_selection;
     }
 
     if(!notCHATING){
@@ -317,10 +318,16 @@ void redraw_chat(void) {
             if(input_box.l + 2 + i >= input_box.r) continue;
             stui_putchar(input_box.l + 2 + i, input_box.b, prompt.items[i]);
         }
-        stui_refresh();
-        if(tab_list) stui_goto(uibox_inner(tab_list_box).l, uibox_inner(tab_list_box).t + tab_list_selection);
-        else stui_goto(input_box.l + 2 + i, input_box.b);
+        if(tab_list) {
+            cursor_x = uibox_inner(tab_list_box).l;
+            cursor_y = uibox_inner(tab_list_box).t + tab_list_selection;
+        } else {
+            cursor_x = input_box.l + 2 + i;
+            cursor_y = input_box.b;
+        }
     }
+    stui_refresh();
+    stui_goto(cursor_x, cursor_y);
 }
 
 void redraw_prompt(const char* prompt_message){
