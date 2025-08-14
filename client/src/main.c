@@ -39,6 +39,9 @@
 #include <ctype.h>
 #include "handle_map.h"
 #include "onUserHandle.h"
+#include "lastRead.h"
+#include "onOkSetLastRead.h"
+#include "updateLastRead.h"
 
 #if defined(__ANDROID__) || defined(_WIN32)
 # define DISABLE_ALT_BUFFER 1
@@ -187,7 +190,12 @@ enum {
 } app_state = APP_STATE_CHAT;
 
 typedef struct {
-    const char** items;
+    const char* name;
+    bool unread;
+} TabLabel;
+
+typedef struct {
+    TabLabel* items;
     size_t len, cap;
 } TabLabels;
 Channels dm_channels = { 0 };
@@ -227,38 +235,57 @@ void redraw_chat(void) {
         switch(tab_list_state) {
         case TAB_LIST_STATE_CATEGORY:
             for(size_t i = 0; i < TAB_CATEGORIES_COUNT; ++i) {
-                da_push(&tab_labels, tab_category_labels[i]);
+                TabLabel label = {
+                    .name = tab_category_labels[i]
+                };
+                da_push(&tab_labels, label);
             }
             break;
         case TAB_LIST_STATE_DMS:
             da_reserve(&tab_labels, dm_channels.len);
             for(size_t i = 0; i < dm_channels.len; ++i) {
-                da_push(&tab_labels, dm_channels.items[i].name);
+                TabLabel label = {
+                    .name = dm_channels.items[i].name,
+                    .unread = dm_channels.items[i].newest_msg_milis > dm_channels.items[i].last_read_milis,
+                };
+                da_push(&tab_labels, label);
             }
             break;
         case TAB_LIST_STATE_SERVERS:
             da_reserve(&tab_labels, servers.len);
             for(size_t i = 0; i < servers.len; ++i) {
-                da_push(&tab_labels, servers.items[i].name);
+                TabLabel label = {
+                    .name = servers.items[i].name,
+                    .unread = servers.items[i].newest_msg_milis > servers.items[i].last_read_milis,
+                };
+                da_push(&tab_labels, label);
             }
             break;
         case TAB_LIST_STATE_SERVER:
             da_reserve(&tab_labels, server_channels.len);
             for(size_t i = 0; i < server_channels.len; ++i) {
-                da_push(&tab_labels, server_channels.items[i].name);
+                TabLabel label = {
+                    .name = server_channels.items[i].name,
+                    .unread = server_channels.items[i].newest_msg_milis > server_channels.items[i].last_read_milis,
+                };
+                da_push(&tab_labels, label);
             }
             break;
         }
         UIBox tab_list_inner = uibox_inner(tab_list_box);
         for(size_t i = 0; i < tab_labels.len; ++i) {
             if(tab_list_inner.t + i > tab_list_inner.b) break;
-            const char* label = tab_labels.items[i];
+            TabLabel* tab_label = &tab_labels.items[i];
+            const char* label = tab_label->name;
             size_t dx = 0;
             uint32_t fg = 0;
             if(tab_list_selection == i) {
                 fg = STUI_RGB(0x00ffff);
                 stui_putchar_color(tab_list_inner.l + dx++, tab_list_inner.t + i, '>', fg, 0);
                 stui_putchar_color(tab_list_inner.l + dx++, tab_list_inner.t + i, ' ', fg, 0);
+            }
+            if(tab_label->unread){
+                stui_putchar_color(tab_list_inner.l + dx++, tab_list_inner.t + i, '*', fg, 0);
             }
             while(*label) {
                 if(tab_list_inner.l + dx > tab_list_inner.r) break;
@@ -413,8 +440,7 @@ static void freeMessagesContents(Messages* msgs) {
     }
     msgs->len = 0;
 }
-void loadChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id) {
-    //TODO: make so it works during other requests or refactor it
+void loadChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id, uint64_t milis) {
     Request request = {
         .protocol_id = msg_protocol_id,
         .func_id = 1,
@@ -424,7 +450,6 @@ void loadChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id) {
     incoming_events[request.packet_id].onEvent = onGetMessageBefore;
     incoming_events[request.packet_id].as.onGetMessagesBefore.msgs = msgs;
     request_hton(&request);
-    uint64_t milis = time_unix_milis();
     MessagesBeforeRequest msgs_request = {
         .server_id = server_id,
         .channel_id = channel_id,
@@ -437,9 +462,13 @@ void loadChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id) {
     client_write(&client, &msgs_request, sizeof(msgs_request));
 }
 
+uint32_t lastRead_protocol_id = 0;
+
 void openChannel(Messages* msgs, uint32_t server_id, uint32_t channel_id){
     freeMessagesContents(msgs);
-    loadChannel(msgs, server_id, channel_id);
+    uint64_t milis = time_unix_milis();
+    loadChannel(msgs, server_id, channel_id, milis);
+    updateLastRead(server_id, channel_id, milis);
 }
 
 uint32_t channel_protocol_id = 0;
@@ -617,6 +646,7 @@ int main(int argc, const char** argv) {
         else if(strcmp(protocol->name, "channel") == 0) channel_protocol_id = protocol->id;
         else if(strcmp(protocol->name, "servers") == 0) servers_protocol_id = protocol->id;
         else if(strcmp(protocol->name, "userHandle") == 0) user_handle_protocol_id = protocol->id;
+        else if(strcmp(protocol->name, "lastRead") == 0) lastRead_protocol_id = protocol->id;
         free(protocol);
     }
     if(!msg_protocol_id) {
@@ -919,6 +949,8 @@ int main(int argc, const char** argv) {
                             .content_len = prompt.len,
                             .content = msg,
                         };
+                        incoming_events[req.packet_id].as.onMessage.server_id = active_server_id;
+                        incoming_events[req.packet_id].as.onMessage.channel_id = active_channel_id;
                         incoming_events[req.packet_id].onEvent = okOnMessage;
                         SendMsgRequest send_msg = {
                             .server_id = active_server_id,

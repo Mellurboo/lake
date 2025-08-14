@@ -139,6 +139,8 @@ int main(int argc, char** argv){
     if(e != SQLITE_OK) return -1;
    e = execute_sql(db, "create table if not exists servers(server_id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT, server_name text)");
    if(e != SQLITE_OK) return -1;
+   e = execute_sql(db, "create table if not exists last_read(user_id INTEGER, server_id INTEGER, channel_id INTEGER, last_milis BIGINT, UNIQUE(user_id, server_id, channel_id))");
+   if(e != SQLITE_OK) return -1;
 
     String_Builder sb = {0};
     sqlite3_stmt *stmt;

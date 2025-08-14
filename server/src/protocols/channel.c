@@ -17,6 +17,10 @@ void getChannelsRequest_ntoh(GetChannelsRequest* packet) {
 }
 typedef struct {
     uint32_t channel_id;
+    uint32_t last_read_milis_low;
+    uint32_t last_read_milis_high;
+    uint32_t newest_msg_milis_low;
+    uint32_t newest_msg_milis_high;
     /*name[...]*/
 } GetChannelsResponse;
 extern DbContext* db;
@@ -53,9 +57,12 @@ void getChannels(Client* client, Request* header) {
         response_hton(&resp_header);
 
         GetChannelsResponse get_channels_response = {
-            .channel_id = channel->id
+            .channel_id = htonl(channel->id),
+            .last_read_milis_low = htonl((uint32_t)channel->last_read_milis),
+            .last_read_milis_high = htonl((uint32_t)(channel->last_read_milis >> 32)),
+            .newest_msg_milis_low = htonl((uint32_t)channel->newest_msg_milis),
+            .newest_msg_milis_high = htonl((uint32_t)(channel->newest_msg_milis >> 32)),
         };
-        get_channels_response.channel_id = htonl(get_channels_response.channel_id);
         client_write_scoped(client) {
             client_write(client, &resp_header, sizeof(resp_header));
             client_write(client, &get_channels_response, sizeof(get_channels_response));

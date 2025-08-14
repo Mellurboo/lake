@@ -54,6 +54,8 @@ int DbContext_init(DbContext** dbOut){
    if(e != SQLITE_OK) return -1;
    e = execute_sql(db->db, "create table if not exists servers(server_id INTEGER UNIQUE PRIMARY KEY AUTOINCREMENT, server_name text)");
    if(e != SQLITE_OK) return -1;
+   e = execute_sql(db->db, "create table if not exists last_read(user_id INTEGER, server_id INTEGER, channel_id INTEGER, last_milis BIGINT, UNIQUE(user_id, server_id, channel_id))");
+   if(e != SQLITE_OK) return -1;
 
    *dbOut = db;
    return 0; 
@@ -272,6 +274,49 @@ int DbContext_get_channels(DbContext* db, uint32_t server_id, uint32_t author_id
         }
         sqlite3_finalize(stmt);
     }
+
+    for(size_t i = 0; i < channels->len; i++){
+        Channel* channel = &channels->items[i];
+        channel->last_read_milis = 0;
+        channel->newest_msg_milis = 0;
+
+        e = sqlite3_prepare_v2(db->db, "SELECT last_milis FROM last_read WHERE server_id = ? AND user_id = ? AND channel_id = ? ORDER BY last_milis ASC LIMIT 1", -1, &stmt, 0);
+        if(e != SQLITE_OK) return -1;
+
+        e = sqlite3_bind_int(stmt, 1, server_id);
+        if(e != SQLITE_OK) return -1;
+
+        e = sqlite3_bind_int(stmt, 2, author_id);
+        if(e != SQLITE_OK) return -1;
+
+        e = sqlite3_bind_int(stmt, 3, channel->id);
+        if(e != SQLITE_OK) return -1;
+
+        if(sqlite3_step(stmt) == SQLITE_ROW) {
+            channel->last_read_milis = sqlite3_column_int64(stmt, 0);
+        }
+
+        sqlite3_finalize(stmt);
+
+        char buf[255] = {0};
+
+        if(server_id == 0){
+            uint32_t max_user_id = author_id < channel->id ? channel->id : author_id;
+            uint32_t min_user_id = author_id < channel->id ? author_id : channel->id;
+            snprintf(buf, sizeof(buf), "SELECT milis from dm_%u_%u order by milis DESC limit 1", min_user_id, max_user_id);
+        }else{
+            snprintf(buf, sizeof(buf), "SELECT milis from server_%u_%u order by milis DESC limit 1", server_id, channel->id);
+        }
+        
+        e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, 0);
+        if(e != SQLITE_OK) return -1;
+
+        if(sqlite3_step(stmt) == SQLITE_ROW) {
+            channel->newest_msg_milis = sqlite3_column_int64(stmt, 0);
+        }
+
+        sqlite3_finalize(stmt);
+    }
     return 0;
 }
 int DbContext_get_user_id_from_handle(DbContext* db, const char* handle, size_t handle_len, uint32_t* user_id) {
@@ -302,7 +347,7 @@ void free_channels(Channels* channels) {
     memset(channels, 0, sizeof(*channels));
 }
 
-int DbContext_get_servers(DbContext* db, Servers* servers){
+int DbContext_get_servers(DbContext* db, uint32_t author_id, Servers* servers){
     sqlite3_stmt *stmt;
     int e = sqlite3_prepare_v2(db->db, "select server_id, server_name from servers", -1, &stmt, 0);
     if(e != SQLITE_OK) return -1;
@@ -317,6 +362,44 @@ int DbContext_get_servers(DbContext* db, Servers* servers){
     }
 
     sqlite3_finalize(stmt);
+
+    for(size_t i = 0; i < servers->len; i++){
+        Server* server = &servers->items[i];
+        server->last_read_milis = 0;
+        server->newest_msg_milis = 0;
+
+        int channel_id = 0;
+
+        e = sqlite3_prepare_v2(db->db, "SELECT last_milis, channel_id FROM last_read WHERE server_id = ? AND user_id = ? ORDER BY last_milis ASC LIMIT 1", -1, &stmt, 0);
+        if(e != SQLITE_OK) return -1;
+
+        e = sqlite3_bind_int(stmt, 1, server->id);
+        if(e != SQLITE_OK) return -1;
+
+        e = sqlite3_bind_int(stmt, 2, author_id);
+        if(e != SQLITE_OK) return -1;
+
+        if(sqlite3_step(stmt) == SQLITE_ROW) {
+            server->last_read_milis = sqlite3_column_int64(stmt, 0);
+            channel_id = sqlite3_column_int(stmt, 1);
+        }
+
+        sqlite3_finalize(stmt);
+
+        // TODO: we have undefined behaviour here if a new user who did not interact what so ever with server asks for the servers then in database there wont be any rows in last_read for that server so we wont be able to find a newest_msg_milis (iterating through all channels doesnt seem like a good idea) so for now it will be 0 in that case
+        if(channel_id != 0){
+            char buf[256];
+            snprintf(buf, sizeof(buf), "SELECT milis from server_%u_%u order by milis DESC limit 1", server->id, channel_id);
+            e = sqlite3_prepare_v2(db->db, buf, -1, &stmt, 0);
+            if(e != SQLITE_OK) return -1;
+            
+            if(sqlite3_step(stmt) == SQLITE_ROW) {
+                server->newest_msg_milis = sqlite3_column_int64(stmt, 0);
+            }
+
+            sqlite3_finalize(stmt);
+        }
+    }
     return 0;
 }
 
@@ -331,4 +414,16 @@ void free_servers(Servers* servers){
     }
     free(servers->items);
     memset(servers, 0, sizeof(*servers));
+}
+
+int DbContext_set_last_read(DbContext* db, uint32_t author_id, uint32_t server_id, uint32_t channel_id, uint64_t milis){
+    
+    char buf[512];
+
+    snprintf(buf, sizeof(buf), "insert into last_read(user_id, server_id, channel_id, last_milis) values (%u, %u, %u, %lu) ON CONFLICT(user_id, server_id, channel_id) DO UPDATE SET last_milis = excluded.last_milis", author_id, server_id, channel_id, milis);
+
+    int e = execute_sql(db->db, buf);
+    if(e != SQLITE_OK) return -1;
+
+    return 0;
 }

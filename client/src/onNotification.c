@@ -6,6 +6,9 @@
 #include "incoming_event.h"
 #include "redraw.h"
 #include "notification.h"
+#include "updateLastRead.h"
+
+extern bool tab_list;
 
 void onNotification(Client* client, Response* response, IncomingEvent* event) {
     // SKIP
@@ -23,11 +26,15 @@ void onNotification(Client* client, Response* response, IncomingEvent* event) {
     // TODO: error check
     client_read(client, content, content_len);
 
+    uint64_t milis = (((uint64_t)notif.milis_high) << 32) | (uint64_t)notif.milis_low;
+    updateNewestMessage(notif.server_id, notif.channel_id, milis);
     if(*event->as.onNotification.active_server_id != notif.server_id || *event->as.onNotification.active_channel_id != notif.channel_id) {
         free(content);
+        if(tab_list) redraw();
         return;
     }
-    uint64_t milis = (((uint64_t)notif.milis_high) << 32) | (uint64_t)notif.milis_low;
+
+    updateLastRead(notif.server_id, notif.channel_id, milis);
     Message msg = {
         .content_len = content_len,
         .content = content,

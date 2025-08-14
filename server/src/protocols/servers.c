@@ -12,6 +12,10 @@
 
 typedef struct {
     uint32_t server_id;
+    uint32_t last_read_milis_low;
+    uint32_t last_read_milis_high;
+    uint32_t newest_msg_milis_low;
+    uint32_t newest_msg_milis_high;
     /*name[...]*/
 } GetServersResponse;
 extern DbContext* db;
@@ -24,7 +28,7 @@ void getServers(Client* client, Request* header) {
 
     Servers servers = {0};
 
-    int e = DbContext_get_servers(db, &servers);
+    int e = DbContext_get_servers(db, client->userID, &servers);
     if(e < 0) goto err_get_servers;
 
     for(size_t i = 0; i < servers.len; ++i){
@@ -39,6 +43,10 @@ void getServers(Client* client, Request* header) {
         client_write(client, &resp, sizeof(Response));
         GetServersResponse get_servers_response = {
             .server_id = htonl(server->id),
+            .last_read_milis_low = htonl((uint32_t)server->last_read_milis),
+            .last_read_milis_high = htonl((uint32_t)(server->last_read_milis >> 32)),
+            .newest_msg_milis_low = htonl((uint32_t)server->newest_msg_milis),
+            .newest_msg_milis_high = htonl((uint32_t)(server->newest_msg_milis >> 32)),
         };
         client_write(client, &get_servers_response, sizeof(get_servers_response));
         client_write(client, server->name, strlen(server->name));

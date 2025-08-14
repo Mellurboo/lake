@@ -17,6 +17,8 @@ typedef struct {
 typedef struct {
     uint32_t id;
     char* name;
+    uint64_t last_read_milis;
+    uint64_t newest_msg_milis;
 } Channel;
 void free_channel(Channel* channel);
 typedef struct {
@@ -27,6 +29,8 @@ void free_channels(Channels* channels);
 
 typedef struct{
     uint32_t id;
+    uint64_t last_read_milis;
+    uint64_t newest_msg_milis;
     char* name;
 } Server;
 void free_server(Server* server);
@@ -52,4 +56,5 @@ int DbContext_send_msg(DbContext* db, uint32_t server_id, uint32_t channel_id, u
 int DbContext_get_msgs_before(DbContext* db, uint32_t server_id, uint32_t channel_id, uint32_t author_id, uint64_t milis, uint32_t limit, Messages* msgs);
 int DbContext_get_channels(DbContext* db, uint32_t server_id, uint32_t author_id, Channels* channels);
 int DbContext_get_user_id_from_handle(DbContext* db, const char* handle, size_t handle_len, uint32_t* user_id);
-int DbContext_get_servers(DbContext* db, Servers* servers);
+int DbContext_get_servers(DbContext* db, uint32_t author_id, Servers* servers);
+int DbContext_set_last_read(DbContext* db, uint32_t author_id, uint32_t server_id, uint32_t channel_id, uint64_t milis);
