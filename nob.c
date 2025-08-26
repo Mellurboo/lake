@@ -54,6 +54,7 @@ int main(int argc, char** argv) {
     bool run = false;
     bool gdb = false;
     bool capturing_args = false;
+    bool slop_loop = false;
 
     File_Paths run_args = { 0 };
     while(argc) {
@@ -69,6 +70,7 @@ int main(int argc, char** argv) {
         else if(strcmp(arg, "db-utils") == 0) example = EXAMPLE_DB_UTILS;
         else if(strcmp(arg, "run") == 0) run = true;
         else if(strcmp(arg, "-gdb") == 0) gdb = true;
+        else if(strcmp(arg, "-slop-loop") == 0) slop_loop = true;
         else {
             nob_log(NOB_ERROR, "Unexpected argument: `%s`", arg);
             help(stderr, exe);
@@ -100,6 +102,7 @@ int main(int argc, char** argv) {
     }
 
     if(run && example != EXAMPLE_ALL) {
+        bool last_exit;
         const char* program = NULL;
         switch(example) {
         case EXAMPLE_CLIENT:
@@ -115,12 +118,17 @@ int main(int argc, char** argv) {
             program = "./.build/keygen/keygen"EXE_SUFFIX;
             break;
         }
-        if(gdb) {
-            cmd_append(&cmd, "gdb", program, "--args");
-        }
-        cmd_append(&cmd, program);
-        da_append_many(&cmd, run_args.items, run_args.count);
-        return cmd_run_sync_and_reset(&cmd) ? 0 : 1;
+        do {
+            if(gdb) {
+                cmd_append(&cmd, "gdb", program, "--args");
+            }
+            cmd_append(&cmd, program);
+            da_append_many(&cmd, run_args.items, run_args.count);
+            last_exit = cmd_run_sync_and_reset(&cmd);
+            // TODO: log timestamp of crash and save report
+            if(slop_loop) nob_log(NOB_ERROR, "%s crashed!... Ah shit. Here we go again", program);
+        } while(slop_loop);
+        return last_exit ? 0 : 1;
     }
     return 0;
 }
